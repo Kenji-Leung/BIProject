@@ -1,7 +1,26 @@
+/* ═══════════════════════════════════════════════════════════
+   SPR Kinetic Simulator + Stack Image Tool  (no graphs)
+   ───────────────────────────────────────────────────────────
+   Reads the control inputs → simulates the binding model →
+   drives the stack-image preview and the .stk/.roi/.bi export.
+
+   Simulation engine: every model is expressed as an ODE derivative
+   (makeDeriv) so the optional mass-transport modifier (withTransport)
+   can wrap ANY of them. Each concentration is integrated
+   independently, which is what the stack image needs (one trace per
+   concentration). No plotting of any kind.
+
+   DOM access for graph-era elements (#status, #readouts, ...) is
+   guarded so the tool never crashes if those elements are absent.
+   ═══════════════════════════════════════════════════════════ */
+
 'use strict';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 const $      = id => document.getElementById(id);
+const on     = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
+const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
+
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
 const vscale = (a, s) => a.map(v => v * s);
 const vsum   = a => a.reduce((x, y) => x + y, 0);
@@ -29,62 +48,83 @@ const simRK4 = (grid, deriv, y0, Cfun) => {
   return out;
 };
 
-/* ── Binding models ──────────────────────────────────────── */
-const simLangmuir = (grid, C, ka, kd, Rmax, tA, tD) => {
-  const kobs = ka * C + kd;
-  const Req  = ka * C * Rmax / kobs;
-  const Rd   = Req * (1 - Math.exp(-kobs * (tD - tA)));
-  return grid.map(t => {
-    if (t < tA) return 0;
-    if (t < tD) return Req * (1 - Math.exp(-kobs * (t - tA)));
-    return Rd * Math.exp(-kd * (t - tD));
-  });
-};
+/* ── Binding models as ODE derivatives ───────────────────────
+   Each model returns:
+     size       - number of state variables
+     deriv(y,C) - dy/dt, C = analyte conc the reaction actually sees
+     fluxCoef(y)- {a,b} for the net rate analyte is drawn from SOLUTION
+                  (J = a*C + b), used only by the mass-transport modifier. */
+function makeDeriv(model, Rmax) {
+  if (model === "langmuir") {
+    const ka = +$("ka").value, kd = +$("kd").value;
+    return {
+      size: 1,
+      deriv: (y, C) => { const R = y[0]; return [ka * C * (Rmax - R) - kd * R]; },
+      fluxCoef: (y) => ({ a: ka * (Rmax - y[0]), b: -kd * y[0] })
+    };
+  }
+  if (model === "hetLigand") {
+    const ka1 = +$("hetka1").value, kd1 = +$("hetkd1").value,
+          ka2 = +$("hetka2").value, kd2 = +$("hetkd2").value, Rmax2 = +$("Rmax2").value;
+    return {
+      size: 2,
+      deriv: (y, C) => { const R1 = y[0], R2 = y[1];
+        return [ka1 * C * (Rmax - R1) - kd1 * R1, ka2 * C * (Rmax2 - R2) - kd2 * R2]; },
+      fluxCoef: (y) => ({ a: ka1 * (Rmax - y[0]) + ka2 * (Rmax2 - y[1]),
+                          b: -(kd1 * y[0] + kd2 * y[1]) })
+    };
+  }
+  if (model === "bivAnalyte") {
+    const ka1 = +$("bivka1").value, kd1 = +$("bivkd1").value,
+          ka2 = +$("bivka2").value, kd2 = +$("bivkd2").value;
+    return {
+      size: 2,
+      deriv: (y, C) => { const R1 = y[0], R2 = y[1], free = Rmax - R1 - 2 * R2;
+        return [2 * ka1 * C * free - kd1 * R1 - ka2 * R1 * free + 2 * kd2 * R2,
+                2 * ka2 * R1 * free - 2 * kd2 * R2]; },
+      // only the first (solution-coupled) step draws analyte; crosslinking does not
+      fluxCoef: (y) => { const free = Rmax - y[0] - 2 * y[1];
+        return { a: 2 * ka1 * free, b: -kd1 * y[0] }; }
+    };
+  }
+  // two-state conformational change:  A + B <-> AB <-> AB*
+  const ka1 = +$("ka1").value, kd1 = +$("kd1").value,
+        ka2 = +$("ka2").value, kd2 = +$("kd2").value;
+  return {
+    size: 2,
+    deriv: (y, C) => { const AB = y[0], ABs = y[1], free = Rmax - AB - ABs;
+      return [ka1 * C * free - kd1 * AB - ka2 * AB + kd2 * ABs, ka2 * AB - kd2 * ABs]; },
+    fluxCoef: (y) => { const free = Rmax - y[0] - y[1];
+      return { a: ka1 * free, b: -kd1 * y[0] }; }
+  };
+}
 
-const simHetLigand = (grid, C, ka1, kd1, ka2, kd2, Rmax, Rmax2, tA, tD) => {
-  const [kobs1, kobs2] = [ka1 * C + kd1, ka2 * C + kd2];
-  const [Req1,  Req2 ] = [ka1 * C * Rmax / kobs1, ka2 * C * Rmax2 / kobs2];
-  const [Rd1,   Rd2  ] = [
-    Req1 * (1 - Math.exp(-kobs1 * (tD - tA))),
-    Req2 * (1 - Math.exp(-kobs2 * (tD - tA)))
-  ];
-  return grid.map(t => {
-    if (t < tA) return 0;
-    if (t < tD) return Req1 * (1 - Math.exp(-kobs1 * (t - tA))) + Req2 * (1 - Math.exp(-kobs2 * (t - tA)));
-    return Rd1 * Math.exp(-kd1 * (t - tD)) + Rd2 * Math.exp(-kd2 * (t - tD));
-  });
-};
-
-const simMassTransport = (grid, C, ka, kd, Rmax, kt, Cfun) =>
-  simRK4(grid, (y, Cc) => {
-    const R = y[0];
-    const Csurf = (kt * Cc + kd * R) / (kt + ka * (Rmax - R));
-    return [ka * Csurf * (Rmax - R) - kd * R];
-  }, [0], Cfun);
-
-const simTwoState = (grid, ka1, kd1, ka2, kd2, Rmax, Cfun) =>
-  simRK4(grid, (y, Cc) => {
-    const [AB, ABs] = y, free = Rmax - AB - ABs;
-    return [ka1 * Cc * free - kd1 * AB - ka2 * AB + kd2 * ABs, ka2 * AB - kd2 * ABs];
-  }, [0, 0], Cfun);
+/* ── Mass-transport modifier. Wraps ANY model's derivative. Under the
+   quasi-steady two-compartment approximation:  kt*(C - Cs) = a*Cs + b,
+   so the surface concentration Cs = (kt*C - b)/(kt + a) is fed to the
+   reaction in place of bulk C. ─────────────────────────────────────── */
+function withTransport(base, kt) {
+  return {
+    size: base.size,
+    deriv: (y, C) => {
+      const { a, b } = base.fluxCoef(y);
+      let Cs = (kt * C - b) / (kt + a);
+      if (!isFinite(Cs) || Cs < 0) Cs = 0;   // guard against pathological inputs
+      return base.deriv(y, Cs);
+    }
+  };
+}
 
 /* ── Formatting ──────────────────────────────────────────── */
-const fmtKD = (kd, ka) => {
-  const nM = (kd / ka) * 1e9;
-  if (nM < 1)    return [(nM * 1000).toPrecision(3), "pM"];
-  if (nM < 1000) return [nM.toPrecision(3), "nM"];
-  return [(nM / 1000).toPrecision(3), "µM"];
-};
-
 const parseConcs = str =>
   str.split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
 
 /* ── Model metadata ──────────────────────────────────────── */
 const MODEL_HINTS = {
-  langmuir:      "Simplest case: one analyte binding one immobilised ligand. Solved analytically.",
-  masstransport: "Adds diffusion limitation near the sensor surface (kt). Slows the apparent on-rate.",
-  twostate:      "Binding followed by a conformational change that locks the complex — note the slow dissociation.",
-  hetLigand:     "Two available binding sites with two completely independent dynamics."
+  langmuir:   "Simplest case: one analyte binding one immobilised ligand.",
+  hetLigand:  "Two available binding sites with two completely independent dynamics.",
+  twostate:   "Binding followed by a conformational change that locks the complex — note the slow dissociation.",
+  bivAnalyte: "The analyte may, at sufficient density, bind two membrane receptors simultaneously."
 };
 
 /* ── State ───────────────────────────────────────────────── */
@@ -103,106 +143,47 @@ function simulate() {
   const noiseSd = +$("noiseSd").value || 0;
   const drift   = +$("drift").value   || 0;
 
-  const grid = Array.from({length: Math.round(tEnd) + 1}, (_, i) => i);
+  // One frame per second, so nFrames = grid.length drives the stack image.
+  const grid = Array.from({ length: Math.round(tEnd) + 1 }, (_, i) => i);
 
-  const traces = concs.map((Cnm, idx) => {
+  // Build the model once, optionally wrapped in the mass-transport modifier.
+  const base   = makeDeriv(model, Rmax);
+  const useMTL = $("mtlOn").checked;
+  const engine = useMTL ? withTransport(base, +$("kt").value) : base;
+
+  // Integrate each concentration independently → one trace per concentration.
+  const traces = concs.map(Cnm => {
     const C    = Cnm * 1e-9;
     const Cfun = t => (t >= tA && t < tD) ? C : 0;
-    let y;
-
-    switch (model) {
-      case "langmuir":
-        y = simLangmuir(grid, C, +$("ka").value, +$("kd").value, Rmax, tA, tD);
-        break;
-      case "masstransport":
-        y = simMassTransport(grid, C, +$("ka").value, +$("kd").value, Rmax, +$("kt").value, Cfun);
-        break;
-      case "hetLigand":
-        y = simHetLigand(grid, C,
-          +$("hetka1").value, +$("hetkd1").value,
-          +$("hetka2").value, +$("hetkd2").value,
-          Rmax, +$("Rmax2").value, tA, tD);
-        break;
-      default:
-        y = simTwoState(grid, +$("ka1").value, +$("kd1").value,
-                              +$("ka2").value, +$("kd2").value, Rmax, Cfun);
-    }
-
+    let y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
     if (noiseOn) y = y.map((v, i) => v + noiseSd * gauss() + drift * (grid[i] / tEnd));
-
     const label = (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
     return { x: grid, y, name: label };
   });
 
-  lastData = {grid, traces, concs};
-  updateReadouts(model, concs.length);
-  $("status").textContent = `${concs.length} curves · ${grid.length} pts · model: ${model}`;
-
+  lastData = { grid, traces, concs };
+  setStatus(`${concs.length} curves · ${grid.length} pts · model: ${model} · MTL ${useMTL ? "on" : "off"}`);
   updateStackImage();
-}
-
-function updateReadouts(model, n) {
-  const box = $("readouts"); box.innerHTML = "";
-  const add = (k, v, accent = false) => {
-    const d = document.createElement("div");
-    d.className = "stat" + (accent ? " accent" : "");
-    d.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
-    box.appendChild(d);
-  };
-
-  if (model === "twostate") {
-    const [ka1, kd1, ka2, kd2] = ["ka1","kd1","ka2","kd2"].map(id => +$(id).value);
-    const appKD = (kd1 / ka1) * (kd2 / (kd2 + ka2));
-    const nM = appKD * 1e9;
-    const [val, unit] = nM < 1    ? [(nM * 1000).toPrecision(3), "pM"]
-                      : nM < 1000 ? [nM.toPrecision(3), "nM"]
-                      :             [(nM / 1000).toPrecision(3), "µM"];
-    add("apparent K<sub>D</sub>", `${val} <small>${unit}</small>`, true);
-    add("k<sub>d1</sub>", `${kd1} <small>s⁻¹</small>`);
-  } else if (model === "hetLigand") {
-    const [val1, unit1] = fmtKD(+$("hetkd1").value, +$("hetka1").value);
-    const [val2, unit2] = fmtKD(+$("hetkd2").value, +$("hetka2").value);
-    add("K<sub>D1</sub>", `${val1} <small>${unit1}</small>`);
-    add("K<sub>D2</sub>", `${val2} <small>${unit2}</small>`);
-  } else {
-    const [ka, kd] = [+$("ka").value, +$("kd").value];
-    const [val, unit] = fmtKD(kd, ka);
-    add("K<sub>D</sub> = k<sub>d</sub>/k<sub>a</sub>", `${val} <small>${unit}</small>`, true);
-    add("k<sub>a</sub>", `${ka.toExponential(1)} <small>M⁻¹s⁻¹</small>`);
-    add("k<sub>d</sub>", `${kd.toExponential(1)} <small>s⁻¹</small>`);
-  }
-  add("Curves", n);
-}
-
-function exportCsv() {
-  if (!lastData) return;
-  const {grid, traces} = lastData;
-  const header = "time_s\t" + traces.map(t => `"${t.name}"`).join("\t");
-  const rows   = grid.map((t, i) =>
-    t.toFixed(3) + "\t" + traces.map(tr => tr.y[i].toFixed(4)).join("\t")
-  );
-  const blob = new Blob([[header, ...rows].join("\n")], {type: "text/tab-separated-values"});
-  Object.assign(document.createElement("a"),
-    {href: URL.createObjectURL(blob), download: "sensorgram.tsv"}).click();
 }
 
 function setModelVisibility() {
   const m = $("model").value;
   const groupMap = {
-    simple:    m === "langmuir" || m === "masstransport",
-    kt:        m === "masstransport",
-    twostate:  m === "twostate",
-    hetLigand: m === "hetLigand",
+    simple:     m === "langmuir",
+    twostate:   m === "twostate",
+    bivAnalyte: m === "bivAnalyte",
+    hetLigand:  m === "hetLigand",
   };
   document.querySelectorAll("[data-group]").forEach(el => {
     el.style.display = groupMap[el.dataset.group] ? "" : "none";
   });
-  $("modelHint").textContent = MODEL_HINTS[m] ?? "";
+  const hint = $("modelHint");
+  if (hint) hint.textContent = MODEL_HINTS[m] ?? "";
 }
 
 function genDilution() {
   const [top, f, n] = ["dilTop","dilFactor","dilN"].map(id => +$(id).value);
-  const pts = Array.from({length: Math.max(1, Math.round(n))}, (_, i) =>
+  const pts = Array.from({ length: Math.max(1, Math.round(n)) }, (_, i) =>
     +(top / f ** i).toPrecision(4)
   );
   $("concSeries").value = pts.join(", ");
@@ -217,12 +198,19 @@ const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
 
 const parseConc  = label => { const m = label.match(/[\d.]+/); return m ? +m[0] : 0; };
 const sortSpots  = headers =>
-  headers.map((h, i) => ({i, conc: parseConc(h), label: h}))
+  headers.map((h, i) => ({ i, conc: parseConc(h), label: h }))
          .sort((a, b) => a.conc - b.conc);
 
 function updateStackImage() {
-  if (!lastData) return;
-  const {grid, traces} = lastData;
+  const results = $("results");
+  // Nothing to show without at least one concentration curve.
+  if (!lastData || !lastData.traces.length) {
+    if (results) results.style.display = "none";
+    parsed = null; orderedSpots = [];
+    return;
+  }
+
+  const { grid, traces } = lastData;
   const nFrames = grid.length;
   const nSpots  = traces.length;
 
@@ -244,13 +232,16 @@ function updateStackImage() {
 
   const totalFrames = nFrames * nSpots;
   const slider = $("frame-slider");
-  slider.max = totalFrames - 1;
-  if (+slider.value > totalFrames - 1) slider.value = 0;
+  if (slider) {
+    slider.max = totalFrames - 1;
+    if (+slider.value > totalFrames - 1) slider.value = 0;
+  }
 
-  $("total-frames").textContent =
+  const totalEl = $("total-frames");
+  if (totalEl) totalEl.textContent =
     `${totalFrames}  (${nFrames} time points × ${nSpots} concentrations)`;
-  $("results").style.display = "block";
-  renderPreview(+slider.value);
+  if (results) results.style.display = "block";
+  renderPreview(slider ? +slider.value : 0);
 }
 
 function decodeFrame(globalFrame) {
@@ -261,32 +252,36 @@ function decodeFrame(globalFrame) {
 }
 
 function getBrightness(globalFrame) {
-  const {raw, globalMin, globalMax, nSpots} = parsed;
-  const {concIdx, timeIdx} = decodeFrame(globalFrame);
+  const { raw, globalMin, globalMax, nSpots } = parsed;
+  const { concIdx, timeIdx } = decodeFrame(globalFrame);
   const ru   = raw[timeIdx * nSpots + orderedSpots[concIdx].i];
   const norm = Math.max(0, (ru - globalMin) / (globalMax - globalMin || 1));
-  return {brightness16: Math.round(norm * MAX16), norm};
+  return { brightness16: Math.round(norm * MAX16), norm };
 }
 
 /* Returns a full IMG_H × IMG_W Uint16Array for the given frame.
    Currently uniform; swap fill logic here when per-pixel values diverge. */
 function getMatrix16(globalFrame) {
-  const {brightness16} = getBrightness(globalFrame);
+  const { brightness16 } = getBrightness(globalFrame);
   return new Uint16Array(IMG_H * IMG_W).fill(brightness16);
 }
 
 function renderPreview(globalFrame) {
+  if (!parsed || !orderedSpots.length) return;
   const canvas = $("img-canvas");
+  if (!canvas) return;
   canvas.width = IMG_W; canvas.height = IMG_H;
-  const {norm} = getBrightness(globalFrame);
+  const { norm } = getBrightness(globalFrame);
   const g   = Math.round(norm * 255);
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = `rgb(${g},${g},${g})`;
   ctx.fillRect(0, 0, IMG_W, IMG_H);
 
-  const {concIdx, timeIdx} = decodeFrame(globalFrame);
-  $("frame-val").textContent = globalFrame;
-  $("conc-tag").textContent  =
+  const { concIdx, timeIdx } = decodeFrame(globalFrame);
+  const frameVal = $("frame-val");
+  if (frameVal) frameVal.textContent = globalFrame;
+  const concTag = $("conc-tag");
+  if (concTag) concTag.textContent =
     `${orderedSpots[concIdx].label}  —  time point ${timeIdx} / ${parsed.nFrames - 1}`;
 }
 
@@ -297,13 +292,13 @@ function findPeakInjectionFrame() {
 
   let bestFrame = 0, bestRU = -Infinity;
   for (let f = 0; f < parsed.nFrames * parsed.nSpots; f++) {
-    const {concIdx, timeIdx} = decodeFrame(f);
-    const t  = parsed.times[timeIdx];
+    const { concIdx, timeIdx } = decodeFrame(f);
+    const t = parsed.times[timeIdx];
     if (t < tA || t >= tD) continue; // only the injection/association window
     const ru = parsed.raw[timeIdx * parsed.nSpots + orderedSpots[concIdx].i];
     if (ru > bestRU) { bestRU = ru; bestFrame = f; }
   }
-  return {frame: bestFrame, ru: bestRU};
+  return { frame: bestFrame, ru: bestRU };
 }
 
 function u8ToBase64(u8) {
@@ -331,7 +326,7 @@ async function deflateRawCompress(u8) {
   const chunks = [];
   const reader = cs.readable.getReader();
   while (true) {
-    const {done, value} = await reader.read();
+    const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
   }
@@ -343,10 +338,7 @@ async function deflateRawCompress(u8) {
 }
 
 /* Decompresses a Uint8Array using raw INFLATE (the inverse of
-   deflateRawCompress). Used to verify round-trips and to decode
-   existing compressed fields (e.g. for debugging/inspection), via
-   DecompressionStream('deflate-raw') — the browser counterpart to
-   .NET's DeflateStream(CompressionMode.Decompress). */
+   deflateRawCompress), via DecompressionStream('deflate-raw'). */
 async function deflateRawDecompress(u8) {
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
@@ -355,7 +347,7 @@ async function deflateRawDecompress(u8) {
   const chunks = [];
   const reader = ds.readable.getReader();
   while (true) {
-    const {done, value} = await reader.read();
+    const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
   }
@@ -366,9 +358,8 @@ async function deflateRawDecompress(u8) {
   return out;
 }
 
-/** Encode a typed array (or plain byte buffer) into a base64 string
- *  the same way the reference software's Encode() does: raw-deflate
- *  compress, then base64. Accepts any TypedArray or ArrayBuffer. */
+/** Encode a typed array (or plain byte buffer) into a base64 string the
+ *  same way the reference software's Encode() does: raw-deflate, base64. */
 async function encodeCompressedData(typedArrayOrBuffer) {
   const u8 = typedArrayOrBuffer instanceof ArrayBuffer
     ? new Uint8Array(typedArrayOrBuffer)
@@ -377,10 +368,8 @@ async function encodeCompressedData(typedArrayOrBuffer) {
   return u8ToBase64(compressed);
 }
 
-/** Decode a base64 string produced by encodeCompressedData() (or by
- *  the reference software's Encode()) back into raw bytes. Returns a
- *  Uint8Array; wrap the result in the appropriate typed array
- *  (e.g. new Float32Array(result.buffer)) to interpret it. */
+/** Decode a base64 string produced by encodeCompressedData() back into
+ *  raw bytes. Wrap the result in the appropriate typed array to read it. */
 async function decodeCompressedData(base64Str) {
   const binary = atob(base64Str);
   const compressed = new Uint8Array(binary.length);
@@ -403,12 +392,8 @@ async function encodeTimeInput() {
   );
 }
 
-
 async function encodeResponseInput() {
-  const {raw, nFrames, nSpots} = parsed;
-  const model = $("model").value;
-  const Rmax = +$("Rmax").value;
-  const totalRmax = model === "hetLigand" ? Rmax + (+$("Rmax2").value) : Rmax;
+  const { raw, nFrames, nSpots } = parsed;
 
   const f32 = new Float32Array(nFrames * nSpots);
   for (let concIdx = 0; concIdx < nSpots; concIdx++) {
@@ -457,8 +442,6 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const bytesPerFrame = IMG_W * IMG_H * 2;
   const timeOffset    = stkTimeOffset(concIdx);
 
-  // Header start time = wall-clock download time + this concentration's
-  // cumulative offset, so each file starts where the previous left off.
   const startTimeStr  = formatTimestamp(new Date(baseDate.getTime() + timeOffset * 1000));
 
   const enc = new TextEncoder();
@@ -526,7 +509,7 @@ function addStkFilesToFolder(folder, startTimeStr = formatTimestamp()) {
 }
 
 async function buildRoiXml(timestamp = formatTimestamp()) {
-  const {frame: peakFrame} = findPeakInjectionFrame();
+  const { frame: peakFrame } = findPeakInjectionFrame();
 
   const mat16   = getMatrix16(peakFrame);
   const grayBuf = new ArrayBuffer(mat16.length * 2);
@@ -589,7 +572,7 @@ async function buildBiXml(timestamp = formatTimestamp()) {
 
 async function downloadAll() {
   if (!parsed || !lastData) return;
-  $("status").textContent = "Building export…";
+  setStatus("Building export…");
 
   const baseDate  = new Date();
   const startTime = formatTimestamp(baseDate);
@@ -602,7 +585,7 @@ async function downloadAll() {
   zip.folder("ROI").file("spr.roi", roiXml);
   zip.folder("TIME").file("data.bi", biXml);
 
-  const blob = await zip.generateAsync({type: "blob"});
+  const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement("a"), {
     href:     URL.createObjectURL(blob),
     download: "spr_export.zip"
@@ -610,14 +593,14 @@ async function downloadAll() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 
-  $("status").textContent = "Export ready: spr_export.zip";
+  setStatus("Export ready: spr_export.zip");
 }
 
 async function downloadSTK() {
   if (!parsed || !lastData) return;
   const zip = new JSZip();
   addStkFilesToFolder(zip.folder("DATA"), formatTimestamp());   // one .stk per concentration
-  const blob = await zip.generateAsync({type: "blob"});
+  const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement('a'), {
     href:     URL.createObjectURL(blob),
     download: 'DATA.zip'
@@ -630,8 +613,10 @@ async function downloadSTK() {
    EVENT LISTENERS
    ══════════════════════════════════════════════════════════ */
 
-["model","ka","kd","ka1","hetka1","kd1","hetkd1","ka2","hetka2","hetkd2",
- "kd2","kt","Rmax","Rmax2","concSeries","tBase","tAssoc","tDissoc","noiseSd","drift"]
+["model","ka","kd","ka1","kd1","ka2","kd2",
+ "hetka1","hetkd1","hetka2","hetkd2",
+ "bivka1","bivkd1","bivka2","bivkd2",
+ "kt","Rmax","Rmax2","concSeries","tBase","tAssoc","tDissoc","noiseSd","drift"]
   .forEach(id => {
     const el = $(id);
     if (!el) { console.warn("Missing element:", id); return; }
@@ -641,19 +626,27 @@ async function downloadSTK() {
     });
   });
 
-$("model").addEventListener("change", () => { setModelVisibility(); simulate(); });
+on("model", "change", () => { setModelVisibility(); simulate(); });
 
-$("noiseOn").addEventListener("change", () => {
+on("noiseOn", "change", () => {
   const on = $("noiseOn").checked;
-  $("noiseFields").style.opacity       = on ? "1" : ".45";
-  $("noiseFields").style.pointerEvents = on ? "auto" : "none";
+  const fields = $("noiseFields");
+  if (fields) {
+    fields.style.opacity       = on ? "1" : ".45";
+    fields.style.pointerEvents = on ? "auto" : "none";
+  }
   simulate();
 });
 
-$("genDil").addEventListener("click", genDilution);
-$("exportCsv").addEventListener("click", exportCsv);
-$("downloadAll").addEventListener("click", downloadAll);
-$("frame-slider").addEventListener("input", function () { renderPreview(+this.value); });
+on("mtlOn", "change", () => {
+  const kt = $("ktField");
+  if (kt) kt.style.display = $("mtlOn").checked ? "" : "none";
+  simulate();
+});
+
+on("genDil", "click", genDilution);
+on("downloadAll", "click", downloadAll);
+on("frame-slider", "input", function () { renderPreview(+this.value); });
 
 /* ── Init ────────────────────────────────────────────────── */
 setModelVisibility();

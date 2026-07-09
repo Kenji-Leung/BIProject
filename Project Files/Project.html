@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="./dependencies/style.css">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+        <script src="./dependencies/projectCode.js" defer></script>
+    </head>
+    <body>
+      <div class="layout">
+
+  <!-- ============ CONTROLS ============ -->
+      <aside class="controls">
+
+          <div class="section">
+            <p class="label">Binding model</p>
+            <div class="field">
+              <select id="model">
+                <option value="langmuir">1 to 1: First-order, Langmuir</option>
+                <option value="hetLigand">1 to 2: Independent Receptors</option>
+                <option value="twostate">2 state: Conformational Change</option>
+                <option value="bivAnalyte">2 state: Bivalent analyte</option>
+              </select>
+              <p class="hint" id="modelHint"></p>
+            </div>
+          </div>
+
+          <div class="section">
+            <p class="label">Kinetic constants</p>
+
+            <!-- 1:1 / mass transport rates -->
+            <div data-group="simple">
+              <div class="grid2">
+                <div class="field">
+                  <label>k<sub>a</sub> <span class="unit">M⁻¹s⁻¹</span></label>
+                  <input type="number" id="ka" value="1e6" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="kd" value="1e-3" step="any">
+                </div>
+              </div>
+            </div>
+
+            <!-- two-state rates -->
+            <div data-group="twostate" style="display:none">
+              <div class="grid2">
+                <div class="field">
+                  <label>k<sub>a1</sub> <span class="unit">M⁻¹s⁻¹</span></label>
+                  <input type="number" id="ka1" value="1e6" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d1</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="kd1" value="1e-2" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>a2</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="ka2" value="5e-3" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d2</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="kd2" value="1e-3" step="any">
+                </div>
+              </div>
+            </div>
+
+            <!-- bivalent analyte rates -->
+            <div data-group="bivAnalyte" style="display:none">
+              <div class="grid2">
+                <div class="field">
+                  <label>k<sub>a1</sub> <span class="unit">M⁻¹s⁻¹</span></label>
+                  <input type="number" id="bivka1" value="1e6" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d1</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="bivkd1" value="1e-2" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>a2</sub> <span class="unit">RU⁻¹s⁻¹</span></label>
+                  <input type="number" id="bivka2" value="5e-3" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d2</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="bivkd2" value="1e-3" step="any">
+                </div>
+              </div>
+            </div>
+
+            <!-- hetLigand -->
+            <div data-group="hetLigand" style="display:none">
+              <div class="grid2">
+                <div class="field">
+                  <label>k<sub>a1</sub> <span class="unit">M⁻¹s⁻¹</span></label>
+                  <input type="number" id="hetka1" value="1e6" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d1</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="hetkd1" value="1e-2" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>a2</sub> <span class="unit">M⁻¹s⁻¹</span></label>
+                  <input type="number" id="hetka2" value="1e5" step="any">
+                </div>
+                <div class="field">
+                  <label>k<sub>d2</sub> <span class="unit">s⁻¹</span></label>
+                  <input type="number" id="hetkd2" value="1e-3" step="any">
+                </div>
+              </div>
+              <div class="field">
+                <label>R<sub>max2</sub> (max response) <span class="unit">RU</span></label>
+              <input type="number" id="Rmax2" value="120" step="any">
+            </div>
+            </div>
+
+            <!-- mass-transport limitation: a modifier that applies to ANY model -->
+            <div class="check" style="margin-top:4px">
+              <input type="checkbox" id="mtlOn">
+              <label for="mtlOn">Mass-transport limitation</label>
+            </div>
+            <div class="field" id="ktField" style="display:none">
+              <label>k<sub>tr</sub> (transport coeff.) <span class="unit">RU·M⁻¹s⁻¹</span></label>
+              <input type="number" id="kt" value="1e8" step="any">
+            </div>
+
+            <div class="field">
+              <label>R<sub>max</sub> (max response) <span class="unit">RU</span></label>
+              <input type="number" id="Rmax" value="120" step="any">
+            </div>
+          </div>
+
+          <div class="section">
+            <p class="label">Analyte concentrations</p>
+            <div class="field">
+              <label>Series <span class="unit">nM, comma/space separated</span></label>
+              <textarea id="concSeries">200, 100, 50, 25, 12.5, 6.25</textarea>
+            </div>
+            <p class="hint">Or generate a dilution series:</p>
+            <div class="grid3" style="margin-top:6px">
+              <div class="field" style="margin-bottom:6px">
+                <label>top <span class="unit">nM</span></label>
+                <input type="number" id="dilTop" value="200" step="any">
+              </div>
+              <div class="field" style="margin-bottom:6px">
+                <label>factor</label>
+                <input type="number" id="dilFactor" value="2" step="any">
+              </div>
+              <div class="field" style="margin-bottom:6px">
+                <label>points</label>
+                <input type="number" id="dilN" value="6" step="1" min="1">
+              </div>
+            </div>
+            <button class="btn ghost" id="genDil">↳ fill series</button>
+          </div>
+
+          <div class="section">
+            <p class="label">Injection timing</p>
+            <div class="grid3">
+              <div class="field">
+                <label>baseline <span class="unit">s</span></label>
+                <input type="number" id="tBase" value="30" step="any">
+              </div>
+              <div class="field">
+                <label>assoc. <span class="unit">s</span></label>
+                <input type="number" id="tAssoc" value="120" step="any">
+              </div>
+              <div class="field">
+                <label>dissoc. <span class="unit">s</span></label>
+                <input type="number" id="tDissoc" value="300" step="any">
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <p class="label">Noise &amp; artifacts</p>
+            <label class="check" style="margin-bottom:9px">
+              <input type="checkbox" id="noiseOn"> add detector noise &amp; drift
+            </label>
+            <div class="grid2" id="noiseFields" style="opacity:.45; pointer-events:none">
+              <div class="field">
+                <label>noise σ <span class="unit">RU</span></label>
+                <input type="number" id="noiseSd" value="1.5" step="any">
+              </div>
+              <div class="field">
+                <label>drift <span class="unit">RU / run</span></label>
+                <input type="number" id="drift" value="2" step="any">
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- ══ Stack image section ════════════════════════════════════ -->
+        <main class="page">
+            <h1>SPR Stack Preview</h1>
+              <div class="field">
+                <label>Amount of Regions</label>
+                <input type="number" id="regionAmount">
+              </div>
+              <div class="label">Frame preview</div>
+              <div class="row">
+                <label>Time point</label>
+                <input type="range" id="frame-slider" min="0" max="0" value="0" step="1">
+                <span class="val" id="frame-val">0</span>
+                <div id="total-frames"></div>
+              </div>
+            <div id="results">
+                <div class="card">
+                  <div id="conc-tag"></div>
+                  <canvas id="img-canvas" width="120" height="160"></canvas>
+                  <div class="img-label">480×640</div>
+                </div>
+                <div class="card">
+                    <div class="label">Export</div>
+                    <div class="btn-row">
+                        <button class="pri" id="downloadAll"> Download all files </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </body>
+</html>
