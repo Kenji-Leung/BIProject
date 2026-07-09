@@ -1,7 +1,3 @@
-/* ═══════════════════════════════════════════════════════════
-   SPR Kinetic Curve Generator + Stack Image Tool
-   ═══════════════════════════════════════════════════════════ */
-
 'use strict';
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -15,17 +11,6 @@ const gauss = () => {
   do { u = Math.random(); } while (!u);
   do { v = Math.random(); } while (!v);
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-};
-
-/* ── Viridis colour scale ────────────────────────────────── */
-const VIRIDIS = ["#440154","#414487","#2a788e","#22a884","#7ad151","#fde725"];
-const hex2rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
-const viridis = x => {
-  x = Math.max(0, Math.min(1, x));
-  const seg = x * (VIRIDIS.length - 1), i = Math.floor(seg), f = seg - i;
-  if (i >= VIRIDIS.length - 1) return VIRIDIS.at(-1);
-  const [a, b] = [hex2rgb(VIRIDIS[i]), hex2rgb(VIRIDIS[i + 1])];
-  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * f)).join(',')})`;
 };
 
 /* ── Generic RK4 integrator ─────────────────────────────── */
@@ -145,43 +130,15 @@ function simulate() {
 
     if (noiseOn) y = y.map((v, i) => v + noiseSd * gauss() + drift * (grid[i] / tEnd));
 
-    const color = concs.length > 1 ? viridis(idx / (concs.length - 1)) : viridis(0.35);
     const label = (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
-    return { x: grid, y, mode: "lines", type: "scatter", name: label, line: {color, width: 2} };
+    return { x: grid, y, name: label };
   });
 
   lastData = {grid, traces, concs};
-  drawPlot(traces, tA, tD);
   updateReadouts(model, concs.length);
   $("status").textContent = `${concs.length} curves · ${grid.length} pts · model: ${model}`;
 
   updateStackImage();
-}
-
-function drawPlot(traces, tA, tD) {
-  const sharedAxis = { gridcolor: "#eae4d8", zeroline: false, linecolor: "#c9c2b4" };
-  Plotly.react("plot", traces, {
-    margin:        { l: 64, r: 18, t: 14, b: 52 },
-    paper_bgcolor: "rgba(0,0,0,0)",
-    plot_bgcolor:  "rgba(0,0,0,0)",
-    font:   { family: "IBM Plex Mono, monospace", size: 12, color: "#1b1a17" },
-    xaxis:  { title: { text: "Time  (s)",      font: { size: 13 } }, ...sharedAxis },
-    yaxis:  { title: { text: "Response  (RU)", font: { size: 13 } },
-              zeroline: true, zerolinecolor: "#ddd6c8", ...sharedAxis },
-    legend: { font: { size: 11 }, bgcolor: "rgba(255,253,248,.7)",
-              bordercolor: "#ddd6c8", borderwidth: 1 },
-    shapes: [{
-      type: "rect", xref: "x", yref: "paper",
-      x0: tA, x1: tD, y0: 0, y1: 1,
-      fillcolor: "rgba(15,107,102,.06)", line: { width: 0 }, layer: "below"
-    }],
-    annotations: [{
-      x: (tA + tD) / 2, y: 1, xref: "x", yref: "paper", text: "injection",
-      showarrow: false, font: { size: 10, color: "#0a4b47" }, yanchor: "bottom"
-    }]
-  }, { responsive: true, displaylogo: false,
-       modeBarButtonsToRemove: ["select2d","lasso2d","autoScale2d"] });
-  Plotly.Plots.resize("plot");
 }
 
 function updateReadouts(model, n) {
@@ -227,11 +184,6 @@ function exportCsv() {
   const blob = new Blob([[header, ...rows].join("\n")], {type: "text/tab-separated-values"});
   Object.assign(document.createElement("a"),
     {href: URL.createObjectURL(blob), download: "sensorgram.tsv"}).click();
-}
-
-function exportPng() {
-  Plotly.downloadImage("plot", {format: "png", width: 1200, height: 760,
-                                filename: "sensorgram", scale: 2});
 }
 
 function setModelVisibility() {
@@ -487,15 +439,15 @@ function stkTimeOffset(concIdx) {
   const span = g[n - 1] - g[0];
   return concIdx * (span + step);
 }
- 
+
 /* Filesystem-safe name for a concentration's .stk file, e.g. "50 nM" -> spr_stack_50nM.stk */
 function stkFileName(concIdx) {
   const tag = orderedSpots[concIdx].label.replace(/[^0-9A-Za-z.]+/g, '');
   return `spr_stack_${tag || concIdx}.stk`;
 }
- 
+
 /* ── Builders: return content only, no download ──────────── */
- 
+
 /* Builds ONE .stk file holding just the frames for a single
    concentration (concIdx into the sorted orderedSpots). Timestamps
    are continuous across concentrations via stkTimeOffset(). */
@@ -504,34 +456,34 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const nFrames       = parsed.nFrames;
   const bytesPerFrame = IMG_W * IMG_H * 2;
   const timeOffset    = stkTimeOffset(concIdx);
- 
+
   // Header start time = wall-clock download time + this concentration's
   // cumulative offset, so each file starts where the previous left off.
   const startTimeStr  = formatTimestamp(new Date(baseDate.getTime() + timeOffset * 1000));
- 
+
   const enc = new TextEncoder();
   const concStr  = orderedSpots[concIdx].label;   // this concentration only
   const labelStr = 'SPR simulation';
   const descStr  = `model: ${$('model').value}`;
- 
+
   const strBytes = s => enc.encode(s);
   const strSize  = s => 1 + strBytes(s).length;
- 
+
   const headerSize =
     4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
   const frameHeaderSize = 4 + 4 + 4 + 4;
   const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame);
- 
+
   const buf  = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
   const u8   = new Uint8Array(buf);
   let   pos  = 0;
   const LE   = true;
- 
+
   const writeInt32   = v => { view.setInt32(pos, v, LE);   pos += 4; };
   const writeFloat32 = v => { view.setFloat32(pos, v, LE); pos += 4; };
   const writeString  = s => { const b = strBytes(s); u8[pos++] = b.length; u8.set(b, pos); pos += b.length; };
- 
+
   // Header
   writeInt32(2);
   writeString(startTimeStr);
@@ -550,13 +502,13 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   writeFloat32(1.0);   // bfRedGain
   writeFloat32(1.0);   // bfGreenGain
   writeFloat32(1.0);   // bfBlueGain
- 
+
   // Frames for this concentration only
   for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
     const f         = concIdx * nFrames + timeIdx;      // global frame index
     const timestamp = timeOffset + lastData.grid[timeIdx];
     const mat       = getMatrix16(f);
- 
+
     writeInt32(FRAME_TYPE_SPR_GRAY16);
     writeFloat32(timestamp);
     writeInt32(IMG_W);
@@ -673,6 +625,7 @@ async function downloadSTK() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
+
 /* ══════════════════════════════════════════════════════════
    EVENT LISTENERS
    ══════════════════════════════════════════════════════════ */
@@ -699,8 +652,7 @@ $("noiseOn").addEventListener("change", () => {
 
 $("genDil").addEventListener("click", genDilution);
 $("exportCsv").addEventListener("click", exportCsv);
-$("exportPng").addEventListener("click", exportPng);
-$("downloadAll").addEventListener("click",downloadAll);
+$("downloadAll").addEventListener("click", downloadAll);
 $("frame-slider").addEventListener("input", function () { renderPreview(+this.value); });
 
 /* ── Init ────────────────────────────────────────────────── */
