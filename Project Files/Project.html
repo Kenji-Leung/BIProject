@@ -173,9 +173,11 @@
 
           <div class="section">
             <p class="label">Noise &amp; artifacts</p>
-            <label class="check" style="margin-bottom:9px">
-              <input type="checkbox" id="noiseOn"> add detector noise &amp; drift
-            </label>
+            <div class="disable"; style="opacity: .5; pointer-events: none;">
+              <label class="check" style="margin-bottom:9px">
+                <input type="checkbox" id="noiseOn"> add detector noise &amp; drift
+              </label>
+            </div>
             <div class="grid2" id="noiseFields" style="opacity:.45; pointer-events:none">
               <div class="field">
                 <label>noise σ <span class="unit">RU</span></label>
@@ -194,8 +196,27 @@
             <h1>SPR Stack Preview</h1>
               <div class="field">
                 <label>Amount of Regions</label>
-                <input type="number" id="regionAmount">
+                <input type="number" id="regionAmount" min="1" value="1">
               </div>
+
+              <div class="row" style="gap:12px; align-items:flex-end; flex-wrap:wrap">
+                <div class="field">
+                  <label>Region</label>
+                  <select id="regionSelect"></select>
+                </div>
+                <div class="field">
+                  <label>Coordinate <span class="unit">x, y</span></label>
+                  <div class="grid2">
+                    <input type="number" id="coordX" placeholder="x" step="any">
+                    <input type="number" id="coordY" placeholder="y" step="any">
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Sidelength <span class="unit">px</span></label>
+                  <input type="number" id="sideLength" step="any" min="0">
+                </div>
+              </div>
+
               <div class="label">Frame preview</div>
               <div class="row">
                 <label>Time point</label>

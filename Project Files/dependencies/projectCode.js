@@ -1,19 +1,3 @@
-/* ═══════════════════════════════════════════════════════════
-   SPR Kinetic Simulator + Stack Image Tool  (no graphs)
-   ───────────────────────────────────────────────────────────
-   Reads the control inputs → simulates the binding model →
-   drives the stack-image preview and the .stk/.roi/.bi export.
-
-   Simulation engine: every model is expressed as an ODE derivative
-   (makeDeriv) so the optional mass-transport modifier (withTransport)
-   can wrap ANY of them. Each concentration is integrated
-   independently, which is what the stack image needs (one trace per
-   concentration). No plotting of any kind.
-
-   DOM access for graph-era elements (#status, #readouts, ...) is
-   guarded so the tool never crashes if those elements are absent.
-   ═══════════════════════════════════════════════════════════ */
-
 'use strict';
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -648,6 +632,64 @@ on("genDil", "click", genDilution);
 on("downloadAll", "click", downloadAll);
 on("frame-slider", "input", function () { renderPreview(+this.value); });
 
+/* ══════════════════════════════════════════════════════════
+   REGIONS — dropdown driven by #regionAmount, with per-region
+   stored coordinate/sidelength values. regionData is exposed on
+   window so the rest of the tool can read each region's box.
+   ══════════════════════════════════════════════════════════ */
+
+const regionData = (window.regionData = {});   // { idx: {x, y, side} }
+let currentRegion = null;                      // index shown in the inputs
+
+const blankRegion = () => ({ x: "", y: "", side: "" });
+
+/* Save whatever is in the inputs into the currently selected region. */
+function saveCurrentRegion() {
+  if (currentRegion == null) return;
+  regionData[currentRegion] = {
+    x:    $("coordX").value,
+    y:    $("coordY").value,
+    side: $("sideLength").value
+  };
+}
+
+/* Load a region's stored values into the inputs. */
+function loadRegion(idx) {
+  const d = regionData[idx] || (regionData[idx] = blankRegion());
+  $("coordX").value     = d.x;
+  $("coordY").value     = d.y;
+  $("sideLength").value = d.side;
+  currentRegion = idx;
+}
+
+/* Rebuild the dropdown to match #regionAmount, preserving stored values. */
+function syncRegions() {
+  const amountEl = $("regionAmount"), selectEl = $("regionSelect");
+  if (!amountEl || !selectEl) return;
+
+  saveCurrentRegion();
+  const n = Math.max(1, parseInt(amountEl.value, 10) || 1);
+  const prev = selectEl.value;
+
+  selectEl.innerHTML = "";
+  for (let i = 1; i <= n; i++) {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = "Region " + i;
+    selectEl.appendChild(opt);
+  }
+  // Drop stored data for regions that no longer exist.
+  Object.keys(regionData).forEach(k => { if (+k > n) delete regionData[k]; });
+
+  selectEl.value = (prev && +prev <= n) ? prev : "1";
+  loadRegion(selectEl.value);
+}
+
+on("regionAmount", "input", syncRegions);
+on("regionSelect", "change", function () { saveCurrentRegion(); loadRegion(this.value); });
+["coordX", "coordY", "sideLength"].forEach(id => on(id, "input", saveCurrentRegion));
+
 /* ── Init ────────────────────────────────────────────────── */
 setModelVisibility();
+syncRegions();
 simulate();
