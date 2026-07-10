@@ -273,6 +273,7 @@ function updateStackImage() {
   const {grid, traces} = lastData;
   const nFrames = grid.length;
   const nSpots  = traces.length;
+  const added = $("addRandom").checked;
 
   const raw = new Float64Array(nFrames * nSpots);
   traces.forEach((tr, c) => tr.y.forEach((v, r) => { raw[r * nSpots + c] = v; }));
@@ -316,21 +317,61 @@ function getBrightness(globalFrame) {
   return {brightness16: Math.round(norm * MAX16), norm};
 }
 
-/* Returns a full IMG_H × IMG_W Uint16Array for the given frame.
-   Currently uniform; swap fill logic here when per-pixel values diverge. */
+const NOISE_AMP16  = MAX16 * 0.1;   // noise strength: 4% of full scale
+const NOISE_BLOCK  = 32;             // px — noise is constant within each block
+
 function getMatrix16(globalFrame) {
   const {brightness16} = getBrightness(globalFrame);
-  return new Uint16Array(IMG_H * IMG_W).fill(brightness16);
+  const mat = new Uint16Array(IMG_H * IMG_W);
+
+  if (!$("addRandom").checked) {
+    mat.fill(brightness16);
+    return mat;
+  }
+
+  const blocksX = Math.ceil(IMG_W / NOISE_BLOCK);
+  const blocksY = Math.ceil(IMG_H / NOISE_BLOCK);
+
+  // one noise offset per block — the whole block shares it
+  const blockNoise = new Float64Array(blocksX * blocksY);
+  for (let b = 0; b < blockNoise.length; b++) {
+    blockNoise[b] = NOISE_AMP16 * gauss();
+  }
+
+  for (let y = 0; y < IMG_H; y++) {
+    const by = (y / NOISE_BLOCK) | 0;
+    for (let x = 0; x < IMG_W; x++) {
+      const bx = (x / NOISE_BLOCK) | 0;
+      const v  = brightness16 + blockNoise[by * blocksX + bx];
+      mat[y * IMG_W + x] = v < 0 ? 0 : v > MAX16 ? MAX16 : Math.round(v);
+    }
+  }
+  return mat;
 }
+
 
 function renderPreview(globalFrame) {
   const canvas = $("img-canvas");
   canvas.width = IMG_W; canvas.height = IMG_H;
-  const {norm} = getBrightness(globalFrame);
-  const g   = Math.round(norm * 255);
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = `rgb(${g},${g},${g})`;
-  ctx.fillRect(0, 0, IMG_W, IMG_H);
+
+  if ($("addRandom").checked) {
+    const mat = getMatrix16(globalFrame);
+    const imgData = ctx.createImageData(IMG_W, IMG_H);
+    const d = imgData.data;
+    for (let i = 0; i < mat.length; i++) {
+      const g = mat[i] >> 8;            // 16-bit → 8-bit for display
+      const j = i * 4;
+      d[j] = d[j + 1] = d[j + 2] = g;
+      d[j + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  } else {
+    const {norm} = getBrightness(globalFrame);
+    const g = Math.round(norm * 255);
+    ctx.fillStyle = `rgb(${g},${g},${g})`;
+    ctx.fillRect(0, 0, IMG_W, IMG_H);
+  }
 
   const {concIdx, timeIdx} = decodeFrame(globalFrame);
   $("frame-val").textContent = globalFrame;
@@ -437,11 +478,17 @@ async function decodeCompressedData(base64Str) {
 }
 
 async function encodeTimeInput() {
-  const frames = parsed.nFrames;
-  const concentration = parsed.nSpots;
-  const total = frames * concentration;
-  const f32 = new Float32Array(total);
-  for (let g = 0; g < total; g++) f32[g] = g + 10;
+  const {nFrames, nSpots} = parsed;
+  const grid = lastData.grid;
+  const f32  = new Float32Array(nFrames * nSpots);
+
+  for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+    const timeOffset = stkTimeOffset(concIdx);          // same offset the .stk uses
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[concIdx * nFrames + timeIdx] = timeOffset + grid[timeIdx];
+    }
+  }
+
   const dataB64 = await encodeCompressedData(f32);
   return (
     `  <Input>\n` +
@@ -696,6 +743,11 @@ $("noiseOn").addEventListener("change", () => {
   $("noiseFields").style.pointerEvents = on ? "auto" : "none";
   simulate();
 });
+
+$("addRandom").addEventListener("change", () => {
+  const adding = $("addRandom").checked;
+  simulate();
+})
 
 $("genDil").addEventListener("click", genDilution);
 $("exportCsv").addEventListener("click", exportCsv);
