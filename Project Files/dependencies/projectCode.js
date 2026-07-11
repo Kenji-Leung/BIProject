@@ -1,21 +1,21 @@
 'use strict';
-
+ 
 /* ── Helpers ─────────────────────────────────────────────── */
 const $      = id => document.getElementById(id);
 const on     = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
 const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
-
+ 
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
 const vscale = (a, s) => a.map(v => v * s);
 const vsum   = a => a.reduce((x, y) => x + y, 0);
-
+ 
 const gauss = () => {
   let u, v;
   do { u = Math.random(); } while (!u);
   do { v = Math.random(); } while (!v);
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 };
-
+ 
 /* ── Generic RK4 integrator ─────────────────────────────── */
 const simRK4 = (grid, deriv, y0, Cfun) => {
   const out = []; let y = [...y0]; out.push(vsum(y));
@@ -31,16 +31,17 @@ const simRK4 = (grid, deriv, y0, Cfun) => {
   }
   return out;
 };
-
+ 
 /* ── Binding models as ODE derivatives ───────────────────────
-   Each model returns:
-     size       - number of state variables
-     deriv(y,C) - dy/dt, C = analyte conc the reaction actually sees
-     fluxCoef(y)- {a,b} for the net rate analyte is drawn from SOLUTION
-                  (J = a*C + b), used only by the mass-transport modifier. */
-function makeDeriv(model, Rmax) {
+   makeDeriv(model, Rmax, gv) where gv(id) returns a numeric value
+   for the given input id. gv defaults to reading the live DOM, but
+   simulate() passes a per-region getter so each region uses ITS OWN
+   constants instead of the shared sidebar values. */
+function makeDeriv(model, Rmax, gv) {
+  gv = gv || (id => +$(id).value);
+ 
   if (model === "langmuir") {
-    const ka = +$("ka").value, kd = +$("kd").value;
+    const ka = gv("ka"), kd = gv("kd");
     return {
       size: 1,
       deriv: (y, C) => { const R = y[0]; return [ka * C * (Rmax - R) - kd * R]; },
@@ -48,8 +49,8 @@ function makeDeriv(model, Rmax) {
     };
   }
   if (model === "hetLigand") {
-    const ka1 = +$("hetka1").value, kd1 = +$("hetkd1").value,
-          ka2 = +$("hetka2").value, kd2 = +$("hetkd2").value, Rmax2 = +$("Rmax2").value;
+    const ka1 = gv("hetka1"), kd1 = gv("hetkd1"),
+          ka2 = gv("hetka2"), kd2 = gv("hetkd2"), Rmax2 = gv("Rmax2");
     return {
       size: 2,
       deriv: (y, C) => { const R1 = y[0], R2 = y[1];
@@ -59,21 +60,19 @@ function makeDeriv(model, Rmax) {
     };
   }
   if (model === "bivAnalyte") {
-    const ka1 = +$("bivka1").value, kd1 = +$("bivkd1").value,
-          ka2 = +$("bivka2").value, kd2 = +$("bivkd2").value;
+    const ka1 = gv("bivka1"), kd1 = gv("bivkd1"),
+          ka2 = gv("bivka2"), kd2 = gv("bivkd2");
     return {
       size: 2,
       deriv: (y, C) => { const R1 = y[0], R2 = y[1], free = Rmax - R1 - 2 * R2;
         return [2 * ka1 * C * free - kd1 * R1 - ka2 * R1 * free + 2 * kd2 * R2,
                 2 * ka2 * R1 * free - 2 * kd2 * R2]; },
-      // only the first (solution-coupled) step draws analyte; crosslinking does not
       fluxCoef: (y) => { const free = Rmax - y[0] - 2 * y[1];
         return { a: 2 * ka1 * free, b: -kd1 * y[0] }; }
     };
   }
   // two-state conformational change:  A + B <-> AB <-> AB*
-  const ka1 = +$("ka1").value, kd1 = +$("kd1").value,
-        ka2 = +$("ka2").value, kd2 = +$("kd2").value;
+  const ka1 = gv("ka1"), kd1 = gv("kd1"), ka2 = gv("ka2"), kd2 = gv("kd2");
   return {
     size: 2,
     deriv: (y, C) => { const AB = y[0], ABs = y[1], free = Rmax - AB - ABs;
@@ -82,27 +81,26 @@ function makeDeriv(model, Rmax) {
       return { a: ka1 * free, b: -kd1 * y[0] }; }
   };
 }
-
-/* ── Mass-transport modifier. Wraps ANY model's derivative. Under the
-   quasi-steady two-compartment approximation:  kt*(C - Cs) = a*Cs + b,
-   so the surface concentration Cs = (kt*C - b)/(kt + a) is fed to the
-   reaction in place of bulk C. ─────────────────────────────────────── */
+ 
+/* ── Mass-transport modifier. Wraps ANY model's derivative. ── */
 function withTransport(base, kt) {
   return {
     size: base.size,
     deriv: (y, C) => {
       const { a, b } = base.fluxCoef(y);
       let Cs = (kt * C - b) / (kt + a);
-      if (!isFinite(Cs) || Cs < 0) Cs = 0;   // guard against pathological inputs
+      if (!isFinite(Cs) || Cs < 0) Cs = 0;
       return base.deriv(y, Cs);
     }
   };
 }
-
+ 
 /* ── Formatting ──────────────────────────────────────────── */
 const parseConcs = str =>
-  str.split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
-
+  (str || "").split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
+ 
+const fmtConc = Cnm => (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
+ 
 /* ── Model metadata ──────────────────────────────────────── */
 const MODEL_HINTS = {
   langmuir:   "Simplest case: one analyte binding one immobilised ligand.",
@@ -110,46 +108,156 @@ const MODEL_HINTS = {
   twostate:   "Binding followed by a conformational change that locks the complex — note the slow dissociation.",
   bivAnalyte: "The analyte may, at sufficient density, bind two membrane receptors simultaneously."
 };
-
+ 
+/* ══════════════════════════════════════════════════════════
+   REGIONS — each region owns a full parameter set + geometry.
+   regionData[idx] is a flat map of input-id -> value/checked.
+   Exposed on window so the rest of the tool can inspect it.
+   ══════════════════════════════════════════════════════════ */
+ 
+const regionData  = (window.regionData = {});   // { idx: { <inputId>: value } }
+let   currentRegion = null;                      // index currently shown in the inputs
+ 
+/* Per-region inputs: everything that defines a region's binding + shape.
+   Timing and noise are intentionally GLOBAL (they define the shared frame
+   grid and detector behaviour for the whole image). */
+const REGION_VALUE_IDS = [
+  "model", "ka", "kd", "ka1", "kd1", "ka2", "kd2",
+  "hetka1", "hetkd1", "hetka2", "hetkd2",
+  "bivka1", "bivkd1", "bivka2", "bivkd2",
+  "kt", "Rmax", "Rmax2", "concSeries",
+  "coordX", "coordY", "radius"
+];
+const REGION_CHECK_IDS = ["mtlOn"];
+ 
+/* Snapshot of the HTML default values, taken once at startup. New regions
+   clone this — so with Rmax defaulting to 0 they start black. */
+let REGION_DEFAULTS = {};
+function captureDefaults() {
+  REGION_DEFAULTS = {};
+  REGION_VALUE_IDS.forEach(id => { const el = $(id); if (el) REGION_DEFAULTS[id] = el.value; });
+  REGION_CHECK_IDS.forEach(id => { const el = $(id); if (el) REGION_DEFAULTS[id] = el.checked; });
+}
+const defaultRegion = () => ({ ...REGION_DEFAULTS });
+ 
+/* Save whatever is in the inputs into the currently selected region. */
+function saveCurrentRegion() {
+  if (currentRegion == null) return;
+  const store = regionData[currentRegion] || (regionData[currentRegion] = {});
+  REGION_VALUE_IDS.forEach(id => { const el = $(id); if (el) store[id] = el.value; });
+  REGION_CHECK_IDS.forEach(id => { const el = $(id); if (el) store[id] = el.checked; });
+}
+ 
+/* Reflect model-dependent field visibility + mass-transport field. */
+function applyRegionUI() {
+  setModelVisibility();
+  const kt = $("ktField");
+  if (kt) kt.style.display = ($("mtlOn") && $("mtlOn").checked) ? "" : "none";
+}
+ 
+/* Load a region's stored values into the inputs. */
+function loadRegion(idx) {
+  const store = regionData[idx] || (regionData[idx] = defaultRegion());
+  REGION_VALUE_IDS.forEach(id => { const el = $(id); if (el && id in store) el.value   = store[id]; });
+  REGION_CHECK_IDS.forEach(id => { const el = $(id); if (el && id in store) el.checked = store[id]; });
+  currentRegion = idx;
+  applyRegionUI();
+}
+ 
+/* Rebuild the dropdown to match #regionAmount, preserving stored values. */
+function syncRegions() {
+  const amountEl = $("regionAmount"), selectEl = $("regionSelect");
+  if (!amountEl || !selectEl) return;
+ 
+  saveCurrentRegion();
+  const n = Math.max(1, parseInt(amountEl.value, 10) || 1);
+  const prev = selectEl.value;
+ 
+  selectEl.innerHTML = "";
+  for (let i = 1; i <= n; i++) {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = "Region " + i;
+    selectEl.appendChild(opt);
+  }
+  // Drop stored data for regions that no longer exist.
+  Object.keys(regionData).forEach(k => { if (+k > n) delete regionData[k]; });
+ 
+  selectEl.value = (prev && +prev <= n) ? prev : "1";
+  loadRegion(selectEl.value);
+}
+ 
 /* ── State ───────────────────────────────────────────────── */
-let lastData     = null;
-let parsed       = null;
-let orderedSpots = [];
-
+let lastData = null;   // { grid }        — kept for timestamp helpers
+let parsed   = null;   // { regions, ... }— everything the image needs
+ 
 function simulate() {
-  const model   = $("model").value;
-  const Rmax    = +$("Rmax").value;
-  const concs   = parseConcs($("concSeries").value);
-  const tA      = +$("tBase").value;
-  const tD      = tA + +$("tAssoc").value;
-  const tEnd    = tD + +$("tDissoc").value;
+  const tA   = +$("tBase").value;
+  const tD   = tA + +$("tAssoc").value;
+  const tEnd = tD + +$("tDissoc").value;
+  const grid = Array.from({ length: Math.round(tEnd) + 1 }, (_, i) => i);
+ 
   const noiseOn = $("noiseOn").checked;
   const noiseSd = +$("noiseSd").value || 0;
   const drift   = +$("drift").value   || 0;
-
-  // One frame per second, so nFrames = grid.length drives the stack image.
-  const grid = Array.from({ length: Math.round(tEnd) + 1 }, (_, i) => i);
-
-  // Build the model once, optionally wrapped in the mass-transport modifier.
-  const base   = makeDeriv(model, Rmax);
-  const useMTL = $("mtlOn").checked;
-  const engine = useMTL ? withTransport(base, +$("kt").value) : base;
-
-  // Integrate each concentration independently → one trace per concentration.
-  const traces = concs.map(Cnm => {
-    const C    = Cnm * 1e-9;
-    const Cfun = t => (t >= tA && t < tD) ? C : 0;
-    let y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
-    if (noiseOn) y = y.map((v, i) => v + noiseSd * gauss() + drift * (grid[i] / tEnd));
-    const label = (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
-    return { x: grid, y, name: label };
-  });
-
-  lastData = { grid, traces, concs };
-  setStatus(`${concs.length} curves · ${grid.length} pts · model: ${model} · MTL ${useMTL ? "on" : "off"}`);
+ 
+  // Capture the current region's edits before reading the store.
+  saveCurrentRegion();
+ 
+  const n = Math.max(1, parseInt($("regionAmount").value, 10) || 1);
+ 
+  // Integrate every region independently using ITS OWN parameters.
+  const regions = [];
+  for (let i = 1; i <= n; i++) {
+    const p    = regionData[i] || defaultRegion();
+    const gv   = id => +p[id];
+    const Rmax = +p.Rmax || 0;
+ 
+    const base   = makeDeriv(p.model || "langmuir", Rmax, gv);
+    const engine = p.mtlOn ? withTransport(base, +p.kt || 0) : base;
+ 
+    // Ascending order -> the stack runs lowest concentration to highest.
+    const concs  = parseConcs(p.concSeries).sort((a, b) => a - b);
+    const traces = concs.map(Cnm => {
+      const C    = Cnm * 1e-9;
+      const Cfun = t => (t >= tA && t < tD) ? C : 0;
+      let y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
+      if (noiseOn) y = y.map((v, k) => v + noiseSd * gauss() + drift * (grid[k] / tEnd));
+      return y;                       // one time-series per concentration
+    });
+ 
+    regions.push({
+      idx: i,
+      x: parseFloat(p.coordX),
+      y: parseFloat(p.coordY),
+      r: parseFloat(p.radius),
+      concs,
+      traces
+    });
+  }
+ 
+  // Shared normalization window across ALL regions (0 when every Rmax is 0).
+  let gMin = Infinity, gMax = -Infinity;
+  regions.forEach(rg => rg.traces.forEach(tr => tr.forEach(v => {
+    if (v < gMin) gMin = v;
+    if (v > gMax) gMax = v;
+  })));
+  if (!isFinite(gMin)) { gMin = 0; gMax = 0; }
+ 
+  // Concentration axis of the stack = the longest region's series.
+  let nSpots = 0;
+  regions.forEach(rg => { nSpots = Math.max(nSpots, rg.concs.length); });
+  const nFrames = grid.length;
+ 
+  parsed   = { times: new Float64Array(grid), grid, nFrames, nSpots,
+               globalMin: gMin, globalMax: gMax, regions };
+  lastData = { grid };
+ 
+  setStatus(`${n} region${n > 1 ? "s" : ""} · ${nFrames} pts × ${nSpots} conc · ` +
+            `signal ${gMax > 0 ? "on" : "black (all Rmax = 0)"}`);
   updateStackImage();
 }
-
+ 
 function setModelVisibility() {
   const m = $("model").value;
   const groupMap = {
@@ -164,129 +272,139 @@ function setModelVisibility() {
   const hint = $("modelHint");
   if (hint) hint.textContent = MODEL_HINTS[m] ?? "";
 }
-
+ 
 function genDilution() {
   const [top, f, n] = ["dilTop","dilFactor","dilN"].map(id => +$(id).value);
   const pts = Array.from({ length: Math.max(1, Math.round(n)) }, (_, i) =>
     +(top / f ** i).toPrecision(4)
   );
   $("concSeries").value = pts.join(", ");
+  saveCurrentRegion();          // the series belongs to the current region
   simulate();
 }
-
+ 
 /* ══════════════════════════════════════════════════════════
-   STACK IMAGE — driven entirely by lastData, no file upload
+   STACK IMAGE — composites every region's disk into each frame
    ══════════════════════════════════════════════════════════ */
-
+ 
 const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
-
-const parseConc  = label => { const m = label.match(/[\d.]+/); return m ? +m[0] : 0; };
-const sortSpots  = headers =>
-  headers.map((h, i) => ({ i, conc: parseConc(h), label: h }))
-         .sort((a, b) => a.conc - b.conc);
-
+ 
 function updateStackImage() {
   const results = $("results");
-  // Nothing to show without at least one concentration curve.
-  if (!lastData || !lastData.traces.length) {
+  if (!parsed || !parsed.regions || parsed.nSpots === 0 || parsed.nFrames === 0) {
     if (results) results.style.display = "none";
-    parsed = null; orderedSpots = [];
     return;
   }
-
-  const { grid, traces } = lastData;
-  const nFrames = grid.length;
-  const nSpots  = traces.length;
-
-  const raw = new Float64Array(nFrames * nSpots);
-  traces.forEach((tr, c) => tr.y.forEach((v, r) => { raw[r * nSpots + c] = v; }));
-
-  let globalMin = Infinity, globalMax = -Infinity;
-  for (const v of raw) {
-    if (v < globalMin) globalMin = v;
-    if (v > globalMax) globalMax = v;
-  }
-
-  parsed = {
-    times: new Float64Array(grid),
-    raw, nFrames, nSpots, globalMin, globalMax,
-    headers: traces.map(t => t.name)
-  };
-  orderedSpots = sortSpots(parsed.headers);
-
-  const totalFrames = nFrames * nSpots;
+ 
+  const totalFrames = parsed.nFrames * parsed.nSpots;
   const slider = $("frame-slider");
   if (slider) {
     slider.max = totalFrames - 1;
     if (+slider.value > totalFrames - 1) slider.value = 0;
   }
-
+ 
   const totalEl = $("total-frames");
   if (totalEl) totalEl.textContent =
-    `${totalFrames}  (${nFrames} time points × ${nSpots} concentrations)`;
+    `${totalFrames}  (${parsed.nFrames} time points × ${parsed.nSpots} concentrations)`;
   if (results) results.style.display = "block";
   renderPreview(slider ? +slider.value : 0);
 }
-
+ 
 function decodeFrame(globalFrame) {
   return {
     concIdx: Math.floor(globalFrame / parsed.nFrames),
     timeIdx: globalFrame % parsed.nFrames
   };
 }
-
-function getBrightness(globalFrame) {
-  const { raw, globalMin, globalMax, nSpots } = parsed;
-  const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  const ru   = raw[timeIdx * nSpots + orderedSpots[concIdx].i];
-  const norm = Math.max(0, (ru - globalMin) / (globalMax - globalMin || 1));
-  return { brightness16: Math.round(norm * MAX16), norm };
+ 
+/* Brightness (0..MAX16) for one region at one (concIdx, timeIdx). */
+function regionBrightness16(rg, concIdx, timeIdx) {
+  if (concIdx >= rg.concs.length) return 0;
+  const { globalMin, globalMax } = parsed;
+  const denom = (globalMax - globalMin) || 1;
+  const ru    = rg.traces[concIdx][timeIdx];
+  const norm  = Math.max(0, (ru - globalMin) / denom);
+  return Math.round(norm * MAX16);
 }
-
-/* Returns a full IMG_H × IMG_W Uint16Array for the given frame.
-   Currently uniform; swap fill logic here when per-pixel values diverge. */
+ 
+/* Stamp a filled disk of value `val` centred at (cx, cy) with radius r. */
+function stampDisk(mat, cx, cy, r, val) {
+  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
+  const r2 = r * r;
+  for (let py = y0; py <= y1; py++) {
+    for (let px = x0; px <= x1; px++) {
+      const dx = px - cx, dy = py - cy;
+      if (dx * dx + dy * dy <= r2) mat[py * IMG_W + px] = val;
+    }
+  }
+}
+ 
+/* Full IMG_H × IMG_W Uint16 frame: black background + one disk per region. */
 function getMatrix16(globalFrame) {
-  const { brightness16 } = getBrightness(globalFrame);
-  return new Uint16Array(IMG_H * IMG_W).fill(brightness16);
+  const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
+  if (!parsed || !parsed.regions) return mat;
+  const { concIdx, timeIdx } = decodeFrame(globalFrame);
+  for (const rg of parsed.regions) {
+    const b16 = regionBrightness16(rg, concIdx, timeIdx);
+    if (b16 > 0) stampDisk(mat, rg.x, rg.y, rg.r, b16);
+  }
+  return mat;
 }
-
+ 
+/* Preview is built from the SAME matrix as the exported .stk frame. */
 function renderPreview(globalFrame) {
-  if (!parsed || !orderedSpots.length) return;
+  if (!parsed || !parsed.regions) return;
   const canvas = $("img-canvas");
   if (!canvas) return;
   canvas.width = IMG_W; canvas.height = IMG_H;
-  const { norm } = getBrightness(globalFrame);
-  const g   = Math.round(norm * 255);
+ 
+  const mat = getMatrix16(globalFrame);
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = `rgb(${g},${g},${g})`;
-  ctx.fillRect(0, 0, IMG_W, IMG_H);
-
+  const img = ctx.createImageData(IMG_W, IMG_H);
+  for (let i = 0; i < mat.length; i++) {
+    const g = mat[i] >> 8;            // 16-bit -> 8-bit grey
+    const j = i * 4;
+    img.data[j] = g; img.data[j + 1] = g; img.data[j + 2] = g; img.data[j + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+ 
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
   const frameVal = $("frame-val");
   if (frameVal) frameVal.textContent = globalFrame;
+ 
   const concTag = $("conc-tag");
-  if (concTag) concTag.textContent =
-    `${orderedSpots[concIdx].label}  —  time point ${timeIdx} / ${parsed.nFrames - 1}`;
+  if (concTag) {
+    const sel = parseInt($("regionSelect").value, 10);
+    const rg  = parsed.regions.find(r => r.idx === sel);
+    const cLabel = (rg && concIdx < rg.concs.length) ? fmtConc(rg.concs[concIdx])
+                                                      : `spot ${concIdx + 1}`;
+    concTag.textContent =
+      `Region ${sel}: ${cLabel}  —  time point ${timeIdx} / ${parsed.nFrames - 1}`;
+  }
 }
-
+ 
 function findPeakInjectionFrame() {
-  // tA / tD come straight from the timing inputs, mirroring simulate().
   const tA = +$("tBase").value;
   const tD = tA + +$("tAssoc").value;
-
+  const { regions, nFrames, nSpots, times } = parsed;
+ 
   let bestFrame = 0, bestRU = -Infinity;
-  for (let f = 0; f < parsed.nFrames * parsed.nSpots; f++) {
+  for (let f = 0; f < nFrames * nSpots; f++) {
     const { concIdx, timeIdx } = decodeFrame(f);
-    const t = parsed.times[timeIdx];
-    if (t < tA || t >= tD) continue; // only the injection/association window
-    const ru = parsed.raw[timeIdx * parsed.nSpots + orderedSpots[concIdx].i];
+    const t = times[timeIdx];
+    if (t < tA || t >= tD) continue;
+    let ru = 0;
+    for (const rg of regions)
+      if (concIdx < rg.concs.length) ru = Math.max(ru, rg.traces[concIdx][timeIdx]);
     if (ru > bestRU) { bestRU = ru; bestFrame = f; }
   }
   return { frame: bestFrame, ru: bestRU };
 }
-
+ 
+/* ── base64 / raw-deflate helpers (unchanged) ────────────── */
 function u8ToBase64(u8) {
-  // chunked to avoid call-stack / argument-count limits on large arrays
   const CHUNK = 0x8000;
   let binary = "";
   for (let i = 0; i < u8.length; i += CHUNK) {
@@ -294,14 +412,7 @@ function u8ToBase64(u8) {
   }
   return btoa(binary);
 }
-
-/* Compresses a Uint8Array using raw DEFLATE (no zlib/gzip header).
-   Confirmed via Python's zlib.decompress(data, -15) that this is the
-   exact format the reference .roi file's SprGray16 Data field uses —
-   feeding raw/uncompressed bytes into that field is what was causing
-   generated .roi files to fail to load silently. Requires
-   CompressionStream('deflate-raw'), supported in all current browsers
-   (Chrome/Edge/Firefox/Safari). */
+ 
 async function deflateRawCompress(u8) {
   const cs = new CompressionStream('deflate-raw');
   const writer = cs.writable.getWriter();
@@ -320,9 +431,7 @@ async function deflateRawCompress(u8) {
   for (const c of chunks) { out.set(c, offset); offset += c.length; }
   return out;
 }
-
-/* Decompresses a Uint8Array using raw INFLATE (the inverse of
-   deflateRawCompress), via DecompressionStream('deflate-raw'). */
+ 
 async function deflateRawDecompress(u8) {
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
@@ -341,9 +450,7 @@ async function deflateRawDecompress(u8) {
   for (const c of chunks) { out.set(c, offset); offset += c.length; }
   return out;
 }
-
-/** Encode a typed array (or plain byte buffer) into a base64 string the
- *  same way the reference software's Encode() does: raw-deflate, base64. */
+ 
 async function encodeCompressedData(typedArrayOrBuffer) {
   const u8 = typedArrayOrBuffer instanceof ArrayBuffer
     ? new Uint8Array(typedArrayOrBuffer)
@@ -351,20 +458,16 @@ async function encodeCompressedData(typedArrayOrBuffer) {
   const compressed = await deflateRawCompress(u8);
   return u8ToBase64(compressed);
 }
-
-/** Decode a base64 string produced by encodeCompressedData() back into
- *  raw bytes. Wrap the result in the appropriate typed array to read it. */
+ 
 async function decodeCompressedData(base64Str) {
   const binary = atob(base64Str);
   const compressed = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) compressed[i] = binary.charCodeAt(i);
   return deflateRawDecompress(compressed);
 }
-
+ 
 async function encodeTimeInput() {
-  const frames = parsed.nFrames;
-  const concentration = parsed.nSpots;
-  const total = frames * concentration;
+  const total = parsed.nFrames * parsed.nSpots;
   const f32 = new Float32Array(total);
   for (let g = 0; g < total; g++) f32[g] = g + 10;
   const dataB64 = await encodeCompressedData(f32);
@@ -375,82 +478,80 @@ async function encodeTimeInput() {
     `  </Input>`
   );
 }
-
+ 
+/* One <Input> (Roi{n}) per region — each region's own response curve. */
 async function encodeResponseInput() {
-  const { raw, nFrames, nSpots } = parsed;
-
-  const f32 = new Float32Array(nFrames * nSpots);
-  for (let concIdx = 0; concIdx < nSpots; concIdx++) {
-    const col = orderedSpots[concIdx].i;
-    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
-      const ru = raw[timeIdx * nSpots + col];
-      f32[concIdx * nFrames + timeIdx] = (ru / 240);
+  const { regions, nFrames, nSpots } = parsed;
+  const parts = [];
+  for (const rg of regions) {
+    const f32 = new Float32Array(nFrames * nSpots);
+    for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+      for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+        const ru = concIdx < rg.concs.length ? rg.traces[concIdx][timeIdx] : 0;
+        f32[concIdx * nFrames + timeIdx] = ru / 240;
+      }
     }
+    const dataB64 = await encodeCompressedData(f32);
+    parts.push(
+      `  <Input>\n` +
+      `    <Name>Roi${rg.idx}</Name>\n` +
+      `    <Data>${dataB64}</Data>\n` +
+      `  </Input>`
+    );
   }
-  const dataB64 = await encodeCompressedData(f32);
-  return (
-    `  <Input>\n` +
-    `    <Name>Roi1</Name>\n` +
-    `    <Data>${dataB64}</Data>\n` +
-    `  </Input>`
-  );
+  return parts.join("\n");
 }
-
+ 
 function formatTimestamp(when = new Date()) {
   const pad = n => String(n).padStart(2, '0');
   return `${pad(when.getMonth()+1)}/${pad(when.getDate())}/${when.getFullYear()} ` +
          `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
 }
-
+ 
 function stkTimeOffset(concIdx) {
   const g = lastData.grid, n = parsed.nFrames;
   const step = n > 1 ? (g[1] - g[0]) : 1;
   const span = g[n - 1] - g[0];
   return concIdx * (span + step);
 }
-
-/* Filesystem-safe name for a concentration's .stk file, e.g. "50 nM" -> spr_stack_50nM.stk */
+ 
 function stkFileName(concIdx) {
-  const tag = orderedSpots[concIdx].label.replace(/[^0-9A-Za-z.]+/g, '');
-  return `spr_stack_${tag || concIdx}.stk`;
+  return `spr_stack_spot${concIdx + 1}.stk`;
 }
-
-/* ── Builders: return content only, no download ──────────── */
-
-/* Builds ONE .stk file holding just the frames for a single
-   concentration (concIdx into the sorted orderedSpots). Timestamps
-   are continuous across concentrations via stkTimeOffset(). */
+ 
+/* ── Builders ────────────────────────────────────────────── */
+ 
 function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const FRAME_TYPE_SPR_GRAY16 = 101;
   const nFrames       = parsed.nFrames;
   const bytesPerFrame = IMG_W * IMG_H * 2;
   const timeOffset    = stkTimeOffset(concIdx);
-
+ 
   const startTimeStr  = formatTimestamp(new Date(baseDate.getTime() + timeOffset * 1000));
-
+ 
   const enc = new TextEncoder();
-  const concStr  = orderedSpots[concIdx].label;   // this concentration only
+  const concStr  = `spot ${concIdx + 1}`;
   const labelStr = 'SPR simulation';
-  const descStr  = `model: ${$('model').value}`;
-
+  const descStr  = `regions: ${parsed.regions.length}`;
+ 
   const strBytes = s => enc.encode(s);
   const strSize  = s => 1 + strBytes(s).length;
-
+ 
   const headerSize =
     4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
   const frameHeaderSize = 4 + 4 + 4 + 4;
   const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame);
-
+ 
   const buf  = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
   const u8   = new Uint8Array(buf);
   let   pos  = 0;
   const LE   = true;
-
+ 
   const writeInt32   = v => { view.setInt32(pos, v, LE);   pos += 4; };
   const writeFloat32 = v => { view.setFloat32(pos, v, LE); pos += 4; };
   const writeString  = s => { const b = strBytes(s); u8[pos++] = b.length; u8.set(b, pos); pos += b.length; };
-
+ 
   // Header
   writeInt32(2);
   writeString(startTimeStr);
@@ -469,13 +570,13 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   writeFloat32(1.0);   // bfRedGain
   writeFloat32(1.0);   // bfGreenGain
   writeFloat32(1.0);   // bfBlueGain
-
-  // Frames for this concentration only
+ 
+  // Frames for this concentration/spot only
   for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
-    const f         = concIdx * nFrames + timeIdx;      // global frame index
+    const f         = concIdx * nFrames + timeIdx;
     const timestamp = timeOffset + lastData.grid[timeIdx];
     const mat       = getMatrix16(f);
-
+ 
     writeInt32(FRAME_TYPE_SPR_GRAY16);
     writeFloat32(timestamp);
     writeInt32(IMG_W);
@@ -484,17 +585,16 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   }
   return buf;
 }
-
-/* Adds one .stk per concentration into the given JSZip folder. */
+ 
 function addStkFilesToFolder(folder, startTimeStr = formatTimestamp()) {
   for (let c = 0; c < parsed.nSpots; c++) {
     folder.file(stkFileName(c), buildStkBuffer(startTimeStr, c));
   }
 }
-
+ 
 async function buildRoiXml(timestamp = formatTimestamp()) {
   const { frame: peakFrame } = findPeakInjectionFrame();
-
+ 
   const mat16   = getMatrix16(peakFrame);
   const grayBuf = new ArrayBuffer(mat16.length * 2);
   const grayDV  = new DataView(grayBuf);
@@ -502,24 +602,40 @@ async function buildRoiXml(timestamp = formatTimestamp()) {
   const grayCompressed = await deflateRawCompress(new Uint8Array(grayBuf));
   const grayB64  = u8ToBase64(grayCompressed);
   const sprGrayW = IMG_W, sprGrayH = IMG_H;
-
+ 
   const BF_W = sprGrayW * 2, BF_H = sprGrayH * 2;
   const bfBuf = new Uint8Array(BF_W * BF_H * 3).fill(128);
   const bfCompressed = await deflateRawCompress(bfBuf);
   const bfB64 = u8ToBase64(bfCompressed);
-
+ 
+  // One ROI polygon per region (a square bounding box around each disk),
+  // falling back to a centred window if a region has no valid geometry.
+  const regions = parsed.regions;
+  let roiEntries = "";
+  regions.forEach(rg => {
+    let x0, y0, x1, y1;
+    if (isFinite(rg.x) && isFinite(rg.y) && isFinite(rg.r) && rg.r > 0) {
+      x0 = Math.max(0, Math.round(rg.x - rg.r));
+      y0 = Math.max(0, Math.round(rg.y - rg.r));
+      x1 = Math.min(sprGrayW, Math.round(rg.x + rg.r));
+      y1 = Math.min(sprGrayH, Math.round(rg.y + rg.r));
+    } else {
+      const w = Math.round(sprGrayW / 2), h = Math.round(sprGrayH / 2);
+      x0 = Math.round((sprGrayW - w) / 2); y0 = Math.round((sprGrayH - h) / 2);
+      x1 = x0 + w; y1 = y0 + h;
+    }
+    const poly = `${x0} ${y0} ${x0} ${y1} ${x1} ${y1} ${x1} ${y0}`;
+    roiEntries +=
+      `  <Roi>\n` +
+      `    <Polygon>${poly}</Polygon>\n` +
+      `    <Sensitivity>1</Sensitivity>\n` +
+      `  </Roi>\n`;
+  });
+ 
   const winW = Math.round(sprGrayW / 2), winH = Math.round(sprGrayH / 2);
   const winX0 = Math.round((sprGrayW - winW) / 2), winY0 = Math.round((sprGrayH - winH) / 2);
-  const winX1 = winX0 + winW,                      winY1 = winY0 + winH;
-  const sprWindow = `${winX0}, ${winY0}, ${winX1}, ${winY1}`;
-
-  const topPolygon = `${winX0} ${winY0} ${winX0} ${winY1} ${winX1} ${winY1} ${winX1} ${winY0}`;
-  const roiEntries =
-    `  <Roi>\n` +
-    `    <Polygon>${topPolygon}</Polygon>\n` +
-    `    <Sensitivity>1</Sensitivity>\n` +
-    `  </Roi>\n`;
-
+  const sprWindow = `${winX0}, ${winY0}, ${winX0 + winW}, ${winY0 + winH}`;
+ 
   return `<?xml version="1.0" encoding="utf-8"?>
           <RoiGroup>
             <Timestamp>${timestamp}</Timestamp>
@@ -539,11 +655,11 @@ async function buildRoiXml(timestamp = formatTimestamp()) {
             </Snapshot>
           </RoiGroup>`;
 }
-
+ 
 async function buildBiXml(timestamp = formatTimestamp()) {
   const timeBlock  = await encodeTimeInput();
   const roiEntries = await encodeResponseInput();
-
+ 
   return `<?xml version="1.0" encoding="utf-8"?>
           <SPRm-Realtime>
             <Version>2.8.2</Version>
@@ -553,22 +669,22 @@ async function buildBiXml(timestamp = formatTimestamp()) {
           </SPRm-Realtime>
           `;
 }
-
+ 
 async function downloadAll() {
   if (!parsed || !lastData) return;
   setStatus("Building export…");
-
+ 
   const baseDate  = new Date();
   const startTime = formatTimestamp(baseDate);
-
+ 
   const roiXml = await buildRoiXml(startTime);
   const biXml  = await buildBiXml(startTime);
-
+ 
   const zip = new JSZip();
   addStkFilesToFolder(zip.folder("DATA"), baseDate);
   zip.folder("ROI").file("spr.roi", roiXml);
   zip.folder("TIME").file("data.bi", biXml);
-
+ 
   const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement("a"), {
     href:     URL.createObjectURL(blob),
@@ -576,14 +692,14 @@ async function downloadAll() {
   });
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-
+ 
   setStatus("Export ready: spr_export.zip");
 }
-
+ 
 async function downloadSTK() {
   if (!parsed || !lastData) return;
   const zip = new JSZip();
-  addStkFilesToFolder(zip.folder("DATA"), formatTimestamp());   // one .stk per concentration
+  addStkFilesToFolder(zip.folder("DATA"), formatTimestamp());
   const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement('a'), {
     href:     URL.createObjectURL(blob),
@@ -592,104 +708,60 @@ async function downloadSTK() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-
+ 
 /* ══════════════════════════════════════════════════════════
    EVENT LISTENERS
    ══════════════════════════════════════════════════════════ */
-
-["model","ka","kd","ka1","kd1","ka2","kd2",
- "hetka1","hetkd1","hetka2","hetkd2",
- "bivka1","bivkd1","bivka2","bivkd2",
- "kt","Rmax","Rmax2","concSeries","tBase","tAssoc","tDissoc","noiseSd","drift"]
-  .forEach(id => {
-    const el = $(id);
-    if (!el) { console.warn("Missing element:", id); return; }
-    el.addEventListener("input", () => {
-      if (id === "model") setModelVisibility();
-      simulate();
-    });
+ 
+// Per-region inputs: save into the current region, then re-simulate.
+REGION_VALUE_IDS.forEach(id => {
+  const el = $(id);
+  if (!el) { console.warn("Missing element:", id); return; }
+  el.addEventListener("input", () => {
+    saveCurrentRegion();
+    if (id === "model") setModelVisibility();
+    simulate();
   });
-
-on("model", "change", () => { setModelVisibility(); simulate(); });
-
-on("noiseOn", "change", () => {
-  const on = $("noiseOn").checked;
-  const fields = $("noiseFields");
-  if (fields) {
-    fields.style.opacity       = on ? "1" : ".45";
-    fields.style.pointerEvents = on ? "auto" : "none";
-  }
-  simulate();
 });
-
+ 
 on("mtlOn", "change", () => {
   const kt = $("ktField");
   if (kt) kt.style.display = $("mtlOn").checked ? "" : "none";
+  saveCurrentRegion();
   simulate();
 });
-
+ 
+// Global inputs (shared by the whole image): just re-simulate.
+["tBase", "tAssoc", "tDissoc", "noiseSd", "drift"].forEach(id => on(id, "input", simulate));
+ 
+on("noiseOn", "change", () => {
+  const o = $("noiseOn").checked;
+  const fields = $("noiseFields");
+  if (fields) {
+    fields.style.opacity       = o ? "1" : ".45";
+    fields.style.pointerEvents = o ? "auto" : "none";
+  }
+  simulate();
+});
+ 
 on("genDil", "click", genDilution);
 on("downloadAll", "click", downloadAll);
 on("frame-slider", "input", function () { renderPreview(+this.value); });
-
-/* ══════════════════════════════════════════════════════════
-   REGIONS — dropdown driven by #regionAmount, with per-region
-   stored coordinate/sidelength values. regionData is exposed on
-   window so the rest of the tool can read each region's box.
-   ══════════════════════════════════════════════════════════ */
-
-const regionData = (window.regionData = {});   // { idx: {x, y, side} }
-let currentRegion = null;                      // index shown in the inputs
-
-const blankRegion = () => ({ x: "", y: "", side: "" });
-
-/* Save whatever is in the inputs into the currently selected region. */
-function saveCurrentRegion() {
-  if (currentRegion == null) return;
-  regionData[currentRegion] = {
-    x:    $("coordX").value,
-    y:    $("coordY").value,
-    side: $("sideLength").value
-  };
-}
-
-/* Load a region's stored values into the inputs. */
-function loadRegion(idx) {
-  const d = regionData[idx] || (regionData[idx] = blankRegion());
-  $("coordX").value     = d.x;
-  $("coordY").value     = d.y;
-  $("sideLength").value = d.side;
-  currentRegion = idx;
-}
-
-/* Rebuild the dropdown to match #regionAmount, preserving stored values. */
-function syncRegions() {
-  const amountEl = $("regionAmount"), selectEl = $("regionSelect");
-  if (!amountEl || !selectEl) return;
-
+ 
+// Region count changes rebuild the dropdown and re-simulate.
+on("regionAmount", "input", () => { syncRegions(); simulate(); });
+ 
+// Switching region loads its params; the stack already holds every region,
+// so only the preview label needs refreshing.
+on("regionSelect", "change", function () {
   saveCurrentRegion();
-  const n = Math.max(1, parseInt(amountEl.value, 10) || 1);
-  const prev = selectEl.value;
-
-  selectEl.innerHTML = "";
-  for (let i = 1; i <= n; i++) {
-    const opt = document.createElement("option");
-    opt.value = i;
-    opt.textContent = "Region " + i;
-    selectEl.appendChild(opt);
-  }
-  // Drop stored data for regions that no longer exist.
-  Object.keys(regionData).forEach(k => { if (+k > n) delete regionData[k]; });
-
-  selectEl.value = (prev && +prev <= n) ? prev : "1";
-  loadRegion(selectEl.value);
-}
-
-on("regionAmount", "input", syncRegions);
-on("regionSelect", "change", function () { saveCurrentRegion(); loadRegion(this.value); });
-["coordX", "coordY", "sideLength"].forEach(id => on(id, "input", saveCurrentRegion));
-
+  loadRegion(this.value);
+  const s = $("frame-slider");
+  renderPreview(s ? +s.value : 0);
+});
+ 
 /* ── Init ────────────────────────────────────────────────── */
+captureDefaults();     // snapshot HTML defaults (Rmax = 0 -> black) first
 setModelVisibility();
-syncRegions();
+syncRegions();         // build dropdown + load region 1
 simulate();

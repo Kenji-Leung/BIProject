@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="en">
     <head>
         <meta charset="UTF-8">
@@ -109,7 +108,7 @@
               </div>
               <div class="field">
                 <label>R<sub>max2</sub> (max response) <span class="unit">RU</span></label>
-              <input type="number" id="Rmax2" value="120" step="any">
+              <input type="number" id="Rmax2" value="0" step="any">
             </div>
             </div>
 
@@ -125,7 +124,7 @@
 
             <div class="field">
               <label>R<sub>max</sub> (max response) <span class="unit">RU</span></label>
-              <input type="number" id="Rmax" value="120" step="any">
+              <input type="number" id="Rmax" value="0" step="any">
             </div>
           </div>
 
@@ -212,8 +211,8 @@
                   </div>
                 </div>
                 <div class="field">
-                  <label>Sidelength <span class="unit">px</span></label>
-                  <input type="number" id="sideLength" step="any" min="0">
+                  <label>Radius <span class="unit">px</span></label>
+                  <input type="number" id="radius" step="any" min="0">
                 </div>
               </div>
 
@@ -227,7 +226,7 @@
             <div id="results">
                 <div class="card">
                   <div id="conc-tag"></div>
-                  <canvas id="img-canvas" width="120" height="160"></canvas>
+                  <canvas id="img-canvas" width="480" height="640"></canvas>
                   <div class="img-label">480×640</div>
                 </div>
                 <div class="card">
