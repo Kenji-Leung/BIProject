@@ -1,21 +1,21 @@
 'use strict';
- 
+
 /* ── Helpers ─────────────────────────────────────────────── */
 const $      = id => document.getElementById(id);
 const on     = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
 const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
- 
+
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
 const vscale = (a, s) => a.map(v => v * s);
 const vsum   = a => a.reduce((x, y) => x + y, 0);
- 
+
 const gauss = () => {
   let u, v;
   do { u = Math.random(); } while (!u);
   do { v = Math.random(); } while (!v);
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 };
- 
+
 /* ── Generic RK4 integrator ─────────────────────────────── */
 const simRK4 = (grid, deriv, y0, Cfun) => {
   const out = []; let y = [...y0]; out.push(vsum(y));
@@ -31,7 +31,7 @@ const simRK4 = (grid, deriv, y0, Cfun) => {
   }
   return out;
 };
- 
+
 /* ── Binding models as ODE derivatives ───────────────────────
    makeDeriv(model, Rmax, gv) where gv(id) returns a numeric value
    for the given input id. gv defaults to reading the live DOM, but
@@ -39,7 +39,7 @@ const simRK4 = (grid, deriv, y0, Cfun) => {
    constants instead of the shared sidebar values. */
 function makeDeriv(model, Rmax, gv) {
   gv = gv || (id => +$(id).value);
- 
+
   if (model === "langmuir") {
     const ka = gv("ka"), kd = gv("kd");
     return {
@@ -81,7 +81,7 @@ function makeDeriv(model, Rmax, gv) {
       return { a: ka1 * free, b: -kd1 * y[0] }; }
   };
 }
- 
+
 /* ── Mass-transport modifier. Wraps ANY model's derivative. ── */
 function withTransport(base, kt) {
   return {
@@ -94,13 +94,13 @@ function withTransport(base, kt) {
     }
   };
 }
- 
+
 /* ── Formatting ──────────────────────────────────────────── */
 const parseConcs = str =>
   (str || "").split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
- 
+
 const fmtConc = Cnm => (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
- 
+
 /* ── Model metadata ──────────────────────────────────────── */
 const MODEL_HINTS = {
   langmuir:   "Simplest case: one analyte binding one immobilised ligand.",
@@ -108,28 +108,29 @@ const MODEL_HINTS = {
   twostate:   "Binding followed by a conformational change that locks the complex — note the slow dissociation.",
   bivAnalyte: "The analyte may, at sufficient density, bind two membrane receptors simultaneously."
 };
- 
+
 /* ══════════════════════════════════════════════════════════
    REGIONS — each region owns a full parameter set + geometry.
    regionData[idx] is a flat map of input-id -> value/checked.
    Exposed on window so the rest of the tool can inspect it.
+   NOTE: the concentration series is intentionally NOT here — it
+   is global (shared across every region).
    ══════════════════════════════════════════════════════════ */
- 
+
 const regionData  = (window.regionData = {});   // { idx: { <inputId>: value } }
 let   currentRegion = null;                      // index currently shown in the inputs
- 
+
 /* Per-region inputs: everything that defines a region's binding + shape.
-   Timing and noise are intentionally GLOBAL (they define the shared frame
-   grid and detector behaviour for the whole image). */
+   Timing, noise, and the concentration series are GLOBAL. */
 const REGION_VALUE_IDS = [
   "model", "ka", "kd", "ka1", "kd1", "ka2", "kd2",
   "hetka1", "hetkd1", "hetka2", "hetkd2",
   "bivka1", "bivkd1", "bivka2", "bivkd2",
-  "kt", "Rmax", "Rmax2", "concSeries",
+  "kt", "Rmax", "Rmax2",
   "coordX", "coordY", "radius"
 ];
 const REGION_CHECK_IDS = ["mtlOn"];
- 
+
 /* Snapshot of the HTML default values, taken once at startup. New regions
    clone this — so with Rmax defaulting to 0 they start black. */
 let REGION_DEFAULTS = {};
@@ -139,7 +140,7 @@ function captureDefaults() {
   REGION_CHECK_IDS.forEach(id => { const el = $(id); if (el) REGION_DEFAULTS[id] = el.checked; });
 }
 const defaultRegion = () => ({ ...REGION_DEFAULTS });
- 
+
 /* Save whatever is in the inputs into the currently selected region. */
 function saveCurrentRegion() {
   if (currentRegion == null) return;
@@ -147,14 +148,14 @@ function saveCurrentRegion() {
   REGION_VALUE_IDS.forEach(id => { const el = $(id); if (el) store[id] = el.value; });
   REGION_CHECK_IDS.forEach(id => { const el = $(id); if (el) store[id] = el.checked; });
 }
- 
+
 /* Reflect model-dependent field visibility + mass-transport field. */
 function applyRegionUI() {
   setModelVisibility();
   const kt = $("ktField");
   if (kt) kt.style.display = ($("mtlOn") && $("mtlOn").checked) ? "" : "none";
 }
- 
+
 /* Load a region's stored values into the inputs. */
 function loadRegion(idx) {
   const store = regionData[idx] || (regionData[idx] = defaultRegion());
@@ -163,16 +164,16 @@ function loadRegion(idx) {
   currentRegion = idx;
   applyRegionUI();
 }
- 
+
 /* Rebuild the dropdown to match #regionAmount, preserving stored values. */
 function syncRegions() {
   const amountEl = $("regionAmount"), selectEl = $("regionSelect");
   if (!amountEl || !selectEl) return;
- 
+
   saveCurrentRegion();
   const n = Math.max(1, parseInt(amountEl.value, 10) || 1);
   const prev = selectEl.value;
- 
+
   selectEl.innerHTML = "";
   for (let i = 1; i <= n; i++) {
     const opt = document.createElement("option");
@@ -182,42 +183,45 @@ function syncRegions() {
   }
   // Drop stored data for regions that no longer exist.
   Object.keys(regionData).forEach(k => { if (+k > n) delete regionData[k]; });
- 
+
   selectEl.value = (prev && +prev <= n) ? prev : "1";
   loadRegion(selectEl.value);
 }
- 
+
 /* ── State ───────────────────────────────────────────────── */
 let lastData = null;   // { grid }        — kept for timestamp helpers
 let parsed   = null;   // { regions, ... }— everything the image needs
- 
+
 function simulate() {
   const tA   = +$("tBase").value;
   const tD   = tA + +$("tAssoc").value;
   const tEnd = tD + +$("tDissoc").value;
   const grid = Array.from({ length: Math.round(tEnd) + 1 }, (_, i) => i);
- 
+
   const noiseOn = $("noiseOn").checked;
   const noiseSd = +$("noiseSd").value || 0;
   const drift   = +$("drift").value   || 0;
- 
+
   // Capture the current region's edits before reading the store.
   saveCurrentRegion();
- 
+
   const n = Math.max(1, parseInt($("regionAmount").value, 10) || 1);
- 
-  // Integrate every region independently using ITS OWN parameters.
+
+  // GLOBAL analyte concentrations, shared by every region.
+  // Ascending order -> the stack runs lowest concentration to highest.
+  const concs = parseConcs($("concSeries").value).sort((a, b) => a - b);
+
+  // Integrate every region independently using ITS OWN parameters,
+  // over the shared concentration series.
   const regions = [];
   for (let i = 1; i <= n; i++) {
     const p    = regionData[i] || defaultRegion();
     const gv   = id => +p[id];
     const Rmax = +p.Rmax || 0;
- 
+
     const base   = makeDeriv(p.model || "langmuir", Rmax, gv);
     const engine = p.mtlOn ? withTransport(base, +p.kt || 0) : base;
- 
-    // Ascending order -> the stack runs lowest concentration to highest.
-    const concs  = parseConcs(p.concSeries).sort((a, b) => a - b);
+
     const traces = concs.map(Cnm => {
       const C    = Cnm * 1e-9;
       const Cfun = t => (t >= tA && t < tD) ? C : 0;
@@ -225,17 +229,16 @@ function simulate() {
       if (noiseOn) y = y.map((v, k) => v + noiseSd * gauss() + drift * (grid[k] / tEnd));
       return y;                       // one time-series per concentration
     });
- 
+
     regions.push({
       idx: i,
       x: parseFloat(p.coordX),
       y: parseFloat(p.coordY),
       r: parseFloat(p.radius),
-      concs,
       traces
     });
   }
- 
+
   // Shared normalization window across ALL regions (0 when every Rmax is 0).
   let gMin = Infinity, gMax = -Infinity;
   regions.forEach(rg => rg.traces.forEach(tr => tr.forEach(v => {
@@ -244,12 +247,10 @@ function simulate() {
   })));
   if (!isFinite(gMin)) { gMin = 0; gMax = 0; }
  
-  // Concentration axis of the stack = the longest region's series.
-  let nSpots = 0;
-  regions.forEach(rg => { nSpots = Math.max(nSpots, rg.concs.length); });
+  const nSpots  = concs.length;
   const nFrames = grid.length;
  
-  parsed   = { times: new Float64Array(grid), grid, nFrames, nSpots,
+  parsed   = { times: new Float64Array(grid), grid, nFrames, nSpots, concs,
                globalMin: gMin, globalMax: gMax, regions };
   lastData = { grid };
  
@@ -278,8 +279,7 @@ function genDilution() {
   const pts = Array.from({ length: Math.max(1, Math.round(n)) }, (_, i) =>
     +(top / f ** i).toPrecision(4)
   );
-  $("concSeries").value = pts.join(", ");
-  saveCurrentRegion();          // the series belongs to the current region
+  $("concSeries").value = pts.join(", ");   // concentration series is global now
   simulate();
 }
  
@@ -288,6 +288,32 @@ function genDilution() {
    ══════════════════════════════════════════════════════════ */
  
 const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
+
+/* Region 0 — noisy background. Uses the block-noise generator from
+   graphConverter.js, but with a smaller block ("smaller px") so the
+   grain is finer. Strength is driven by the #bgNoise text box. */
+const BG_NOISE_BLOCK = 6;   // px — finer than graphConverter's 32
+function bgNoiseAmp16() {
+  const el = $("bgNoise");
+  const pct = el ? (+el.value || 0) : 0;   // % of full scale
+  return MAX16 * (pct / 100);
+}
+function fillNoiseBackground(mat) {
+  const amp = bgNoiseAmp16();
+  if (amp <= 0) return;                     // strength 0 -> stays black
+  const blocksX = Math.ceil(IMG_W / BG_NOISE_BLOCK);
+  const blocksY = Math.ceil(IMG_H / BG_NOISE_BLOCK);
+  const blockNoise = new Float64Array(blocksX * blocksY);
+  for (let b = 0; b < blockNoise.length; b++) blockNoise[b] = amp * gauss();
+  for (let y = 0; y < IMG_H; y++) {
+    const by = (y / BG_NOISE_BLOCK) | 0;
+    for (let x = 0; x < IMG_W; x++) {
+      const bx = (x / BG_NOISE_BLOCK) | 0;
+      const v  = blockNoise[by * blocksX + bx];
+      mat[y * IMG_W + x] = v < 0 ? 0 : v > MAX16 ? MAX16 : Math.round(v);
+    }
+  }
+}
  
 function updateStackImage() {
   const results = $("results");
@@ -319,7 +345,7 @@ function decodeFrame(globalFrame) {
  
 /* Brightness (0..MAX16) for one region at one (concIdx, timeIdx). */
 function regionBrightness16(rg, concIdx, timeIdx) {
-  if (concIdx >= rg.concs.length) return 0;
+  if (concIdx >= rg.traces.length) return 0;
   const { globalMin, globalMax } = parsed;
   const denom = (globalMax - globalMin) || 1;
   const ru    = rg.traces[concIdx][timeIdx];
@@ -344,11 +370,12 @@ function stampDisk(mat, cx, cy, r, val) {
 /* Full IMG_H × IMG_W Uint16 frame: black background + one disk per region. */
 function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
+  fillNoiseBackground(mat);                      // region 0: noisy background
   if (!parsed || !parsed.regions) return mat;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
   for (const rg of parsed.regions) {
     const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    if (b16 > 0) stampDisk(mat, rg.x, rg.y, rg.r, b16);
+    stampDisk(mat, rg.x, rg.y, rg.r, b16);       // disks sit on top of the noise
   }
   return mat;
 }
@@ -377,9 +404,8 @@ function renderPreview(globalFrame) {
   const concTag = $("conc-tag");
   if (concTag) {
     const sel = parseInt($("regionSelect").value, 10);
-    const rg  = parsed.regions.find(r => r.idx === sel);
-    const cLabel = (rg && concIdx < rg.concs.length) ? fmtConc(rg.concs[concIdx])
-                                                      : `spot ${concIdx + 1}`;
+    const cLabel = concIdx < parsed.concs.length ? fmtConc(parsed.concs[concIdx])
+                                                 : `spot ${concIdx + 1}`;
     concTag.textContent =
       `Region ${sel}: ${cLabel}  —  time point ${timeIdx} / ${parsed.nFrames - 1}`;
   }
@@ -397,7 +423,7 @@ function findPeakInjectionFrame() {
     if (t < tA || t >= tD) continue;
     let ru = 0;
     for (const rg of regions)
-      if (concIdx < rg.concs.length) ru = Math.max(ru, rg.traces[concIdx][timeIdx]);
+      if (concIdx < rg.traces.length) ru = Math.max(ru, rg.traces[concIdx][timeIdx]);
     if (ru > bestRU) { bestRU = ru; bestFrame = f; }
   }
   return { frame: bestFrame, ru: bestRU };
@@ -487,7 +513,7 @@ async function encodeResponseInput() {
     const f32 = new Float32Array(nFrames * nSpots);
     for (let concIdx = 0; concIdx < nSpots; concIdx++) {
       for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
-        const ru = concIdx < rg.concs.length ? rg.traces[concIdx][timeIdx] : 0;
+        const ru = concIdx < rg.traces.length ? rg.traces[concIdx][timeIdx] : 0;
         f32[concIdx * nFrames + timeIdx] = ru / 240;
       }
     }
@@ -516,7 +542,9 @@ function stkTimeOffset(concIdx) {
 }
  
 function stkFileName(concIdx) {
-  return `spr_stack_spot${concIdx + 1}.stk`;
+  const c = parsed.concs[concIdx];
+  const tag = (c != null) ? fmtConc(c).replace(/[^0-9A-Za-z.]+/g, '') : `spot${concIdx + 1}`;
+  return `spr_stack_${tag}.stk`;
 }
  
 /* ── Builders ────────────────────────────────────────────── */
@@ -530,7 +558,8 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const startTimeStr  = formatTimestamp(new Date(baseDate.getTime() + timeOffset * 1000));
  
   const enc = new TextEncoder();
-  const concStr  = `spot ${concIdx + 1}`;
+  const c        = parsed.concs[concIdx];
+  const concStr  = (c != null) ? fmtConc(c) : `spot ${concIdx + 1}`;
   const labelStr = 'SPR simulation';
   const descStr  = `regions: ${parsed.regions.length}`;
  
@@ -731,8 +760,9 @@ on("mtlOn", "change", () => {
   simulate();
 });
  
-// Global inputs (shared by the whole image): just re-simulate.
-["tBase", "tAssoc", "tDissoc", "noiseSd", "drift"].forEach(id => on(id, "input", simulate));
+// Global inputs (shared by the whole image, incl. the concentration series).
+["concSeries", "tBase", "tAssoc", "tDissoc", "noiseSd", "drift"]
+  .forEach(id => on(id, "input", simulate));
  
 on("noiseOn", "change", () => {
   const o = $("noiseOn").checked;
@@ -744,6 +774,12 @@ on("noiseOn", "change", () => {
   simulate();
 });
  
+// Region 0 background noise strength — just repaint the current frame.
+on("bgNoise", "input", () => {
+  const s = $("frame-slider");
+  renderPreview(s ? +s.value : 0);
+});
+
 on("genDil", "click", genDilution);
 on("downloadAll", "click", downloadAll);
 on("frame-slider", "input", function () { renderPreview(+this.value); });
