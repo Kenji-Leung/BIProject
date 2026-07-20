@@ -1,36 +1,26 @@
 // Very basic version of a different way of generating two-dimentionsal data.
 // This prototype does not incorporate user-interface - all parameters hard-coded
 // Advantages of this method:
-  // Integrates one time per model/set of parameters.
-  // Adding any number of randomly generated circles / overlapping circles is fast and computationally inexpensive
-  // Adding edge dominance is a simple extension
-  // Incorporating drift in kinetic parameters is also reasonable, and can be done inexpensively
+// Integrates one time per model/set of parameters.
+// Adding any number of randomly generated circles / overlapping circles is fast and computationally inexpensive
+// Adding edge dominance is a simple extension
+// Incorporating drift in kinetic parameters is also reasonable, and can be done inexpensively
 
 // Outline of what this does, assuming one dynamic present:
-  // Step 1: Integrate one time (for whole time series, incorporating all concentrations) at RMax = 1. Set aside result Y
-  // Step 2: Define a two dimensional, mxn scalar field \in [0,1]. Supplied parameters m and n
-    // const s begins as an array of zeros
-    // circle mask defines circular regions withing the field where elements equal 1
-    // the following loop multiplies the corresponding capacity (this is where we will apply edge dominance and kinetic heterogeneity)
-  // Step 3: The final result is the outer product of the scalar field and Y, result is a flat vector of length m*n*t which corresponds to the mxnxT array.
+// Step 1: Integrate one time (for whole time series, incorporating all concentrations) at RMax = 1. Set aside result Y
+// Step 2: Uses seeded PRNG to distribute random circular regions, with random radii and capacity,
+// which then forms the scalar capacity field
+// Step 3: The final result is the outer product of the scalar field and Y, result is a flat vector of length m*n*t which corresponds to the mxnxT array.
+// Step 4: Generation and addition of noise and drift, using the same PRNG procedure with a different seed, according to specifications
 
 // Next steps
-  // Step: Enable model selection.
-    //  Note that bivalent analyte model does not allow for the Rmax factorization the same way, and that furthermore may be better represented by a truly spatial model. Must investigate.
-  // Step: Random generation of circle placement, number of circles, and capacity.
-    // This will consist furthermore of circles that overlap. MUST DECIDE: how to handle circle overlap? Likely not simply additive if this overlap represents vertical stacks of cellular growth.
-  // Step: Stronger response on circle edges: This should be quick
-  // Step: Heterogeneity of kinetic parameters within the same model/dynamic
-    // Must investigate what distribution would be appropriate to use
-  // Step: Heterogeneity of multiple models/dynamics within the same data
+// 1. Implement edge dominance (ask about setting a floor in the center)
+// 2. Implement all models EXCEPT Bivalent analyte
+// 3. Implement Bivalent Analyte
+// 4. Kinetic Heterogeneity
+// 5. Model Heterogeneity
 
-
-
-// Step 1
-// assume, for simplicity one model - the Langmuir model
-// assume that parameters have been chosen
-
-
+// Step 1: Integrate once at Rmax = 1
 const model = "langmuir";
 const ka = 1e6, kd = 1e-3, Rmax = 1;
 const str = "200, 100, 50, 25, 12.5, 6.25";
@@ -56,10 +46,7 @@ function simRK4(grid, deriv, y0, Cfun){
 }
 
 function makeDeriv(model, RmaxArg){
-  return {
-    size:1,
-    deriv:(y,C) => { const R=y[0]; return [ka*C*(RmaxArg - R) - kd*R]; }
-  };
+  return { size:1, deriv:(y,C)=>{ const R=y[0]; return [ka*C*(RmaxArg-R) - kd*R]; } };
 }
 
 function parseConcs(str){
@@ -71,10 +58,9 @@ function simulate(){
   const cyc = tAssoc + tDiss;
   const N = concsNm.length;
   const total = tBase + N*cyc;
-  const dt = 1; //Enforcing 1s resolution
-  const npts = Math.round(total/dt); // Only distinct from total when dt /neq 1.
-  const grid=[];
-  for(let i=0;i <= npts; i++) grid.push(+(i*dt).toFixed(4));
+  const dt = 1;
+  const npts = Math.round(total/dt);
+  const grid=[]; for(let i=0;i<=npts;i++) grid.push(+(i*dt).toFixed(4));
 
   const concsM = concsNm.map(c=>c*1e-9);
   const Cfun = t=>{
@@ -83,66 +69,98 @@ function simulate(){
     if (k >= N) k = N-1;
     return ((t - tBase) - k*cyc) < tAssoc ? concsM[k] : 0;
   };
-
   const base = makeDeriv(model, Rmax);
-  const Y = simRK4(grid, base.deriv, new Array(base.size).fill(0), Cfun);
-  return Y;
+  return simRK4(grid, base.deriv, new Array(base.size).fill(0), Cfun);
 }
-
 const Y = simulate();
+const T = Y.length;
 console.log(Y.length, "points; final RU =", Y[Y.length-1]);
 
-// Step 2: Two sets of hard-coded parameters here
-const m = 640, n = 480;   // grid dimensions
+// Step 2: build the scalar capacity field according to pseudo-random center coordinates, radii, and capacities, until a confluence is achieved.
 
-// Stores circular region center, radius, and "capacity" as proportion of Rmax
-const circles = [
-  { ci: 10.5, cj: 20,   r: 5, capacity: 0.8 },
-  { ci: 40,   cj: 15.5, r: 8, capacity: 0.5 },
-  { ci: 25,   cj: 50,   r: 6, capacity: 1.0 },
-];
-
-// Uses flat indices INDEXED BY  i * n + j , m rows, n columns, row-major
-function circleMask(m, n, ci, cj, r) {
-  const mask = new Float64Array(m * n);   // flat, zeros
-  const r2 = r * r;
-  for (let i = 0; i < m; i++) {
-    for (let j = 0; j < n; j++) {
-      const di = i - ci;
-      const dj = j - cj;
-      if (di*di + dj*dj <= r2) mask[i * n + j] = 1;   // flat index
-    }
-  }
-  return mask;
+// This is an alternative to math.random, but exactly reproducible given the same seed.
+// seed can be any non-negative integer between 0 and 2^{32}-1
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
+const SURFACE_SEED = 12345;          // change this to regenerate a different surface
+const rngSurface = mulberry32(SURFACE_SEED);
+// This is a function. call this to get a pseudo-random number /in [0,1).  Every call gets a number, and then the sequence advances to a new pseudo-random number.
 
+const m = 640, n = 480;              // 640 rows (tall) x 480 cols (wide) our default window
+
+// Quantize capacities - not necessary for Langmuir, but will be important for bivalent analyte.
+
+const capacityBins = [0.4, 0.6, 0.8, 1.0];
+
+// Hard-coded paremeters governing placement
+const targetConfluence = 0.50;       // representing a union of pixels
+const rMin = 15, rMax = 25;          // radius range, pixels
+const MAX_CIRCLES = 5000;            // a cap in iterations to prevent a hangup
+
+// covered[k] flags 1/0 whether a pixel is covered, so that we may know when confluence is attained.
+const covered = new Uint8Array(m * n);
+let coveredCount = 0;
+
+// initialize scalar capacity field s[k]
 const s = new Float64Array(m * n);
 
-for (const circle of circles) {
-  const mask = circleMask(m, n, circle.ci, circle.cj, circle.r);
-  const c = circle.capacity;
-  for (let k = 0; k < s.length; k++) {
-    s[k] += mask[k] * c;
+const circles = [];                  // record of what was placed
+
+// this function takes the pseudo-random stream and sets the centers, radius, and capacity, then stamps that onto the field.
+function placeOneCircle(){
+  // draw geometry + capacity from the seeded stream
+  const ci  = rngSurface() * m;                          // center row (real-valued)
+  const cj  = rngSurface() * n;                          // center col
+  const r   = rMin + rngSurface() * (rMax - rMin);       // radius
+  const cap = capacityBins[(rngSurface() * capacityBins.length) | 0];
+  const binIdx = capacityBins.indexOf(cap);
+
+  const r2 = r * r;
+  // bounding box, clamped to grid — only visit pixels near this circle
+  const iLo = Math.max(0, Math.floor(ci - r)), iHi = Math.min(m-1, Math.ceil(ci + r));
+  const jLo = Math.max(0, Math.floor(cj - r)), jHi = Math.min(n-1, Math.ceil(cj + r));
+
+  for (let i = iLo; i <= iHi; i++){
+    for (let j = jLo; j <= jHi; j++){
+      const di = i - ci, dj = j - cj;
+      if (di*di + dj*dj <= r2){
+        const k = i*n + j;
+        if (covered[k] === 0){ covered[k] = 1; coveredCount++; }
+        if (cap > s[k]) s[k] = cap;          // MAX composition
+      }
+    }
   }
+  circles.push({ ci, cj, r, capacity: cap, binIdx });
 }
 
-// Step 3: Outer Product ALSO FLAT
-// s: flat Float64Array of length m*n (the capacity field)
-// Y: array of length T (unit-capacity response over time)
-// result: flat Float64Array of length m*n*T
+// continue to place until either union coverage hits the target or iter > MAX_CIRCLES
+let iter = 0;
+while (coveredCount / (m*n) < targetConfluence && iter < MAX_CIRCLES){
+  placeOneCircle();
+  iter++;
+}
+const achievedConfluence = coveredCount / (m*n);
+console.log(`placed ${circles.length} circles; confluence target ${targetConfluence}, achieved ${achievedConfluence.toFixed(4)}${iter>=MAX_CIRCLES ? "  (HIT SAFETY CAP)" : ""}`);
 
-const T = Y.length;
+
+// Step 3: outer product  s ⊗ Y  → flat m*n*T stack
+// In this step we take the single integration and broadcast it across the scalar array
+
 const stack = new Float64Array(s.length * T);
-
-for (let k = 0; k < s.length; k++) {   // each pixel
+for (let k = 0; k < s.length; k++){
   const sk = s[k];
-  for (let t = 0; t < T; t++) {        // each time point
-    stack[k * T + t] = sk * Y[t];
-  }
+  for (let t = 0; t < T; t++) stack[k*T + t] = sk * Y[t];
 }
 
-
-// Step 4: Noise
+// Step 4: noise + drift
+// Different only in that this now incorportes it's own seed for reproducible noise
 
 // noise parameters
 const D          = 3.5 * Rmax;   // TOTAL accumulated drift (asymptote), not initial rate
@@ -152,23 +170,28 @@ const thetaOU    = 0.005;        // OU mean-reversion rate (1/s). Small = long c
 const decayOU    = true;         // scale OU jitter by the same exp(-t/tau) envelope
 const sigmaPixel = 0.10 * Rmax;  // per-pixel noise: your 5-30% of Rmax range
 
-// Box-Muller - i.e. make it Gaussian
+const NOISE_SEED = 67890;
+const rngNoise = mulberry32(NOISE_SEED);
+
+// Box-Muller transform
 function gauss(){
   let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
+  while (u === 0) u = rngNoise();
+  while (v === 0) v = rngNoise();
   return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
 }
 
-// --- drift vector: one value per frame, shared by ALL pixels ---
-const dtGrid = 1;                       // must match the 1 s grid from Step 1
+
+// drift vector: one value per frame, shared by all pixels
+const dtGrid = 1;
 const driftCommon = new Float64Array(T);
-let w = 0;                              // OU state — persists across t for temporal correlation
-for (let t = 0; t < T; t++) {
-  const envelope = decayOU ? Math.exp(-t*dtGrid / tau) : 1;
-  // OU update: restoring pull toward 0, plus a random kick
-  w += -thetaOU * w * dtGrid + sigmaOU * envelope * Math.sqrt(dtGrid) * gauss();
-  driftCommon[t] = D * (1 - Math.exp(-t*dtGrid / tau)) + w;
+{ let w = 0;    // OU state — persists across t for temporal correlation
+  for (let t = 0; t < T; t++){
+    const envelope = decayOU ? Math.exp(-t*dtGrid/tau) : 1;
+    // OU update: restoring pull toward 0, plus a random kick
+    w += -thetaOU*w*dtGrid + sigmaOU*envelope*Math.sqrt(dtGrid)*gauss();
+    driftCommon[t] = D*(1 - Math.exp(-t*dtGrid/tau)) + w;
+  }
 }
 
 // --- apply drift + noise to the stack ---
@@ -180,20 +203,3 @@ for (let k = 0; k < s.length; k++) {
     + sigmaPixel * gauss();   // fresh draw for every (k,t) — i.i.d.
   }
 }
-
-
-
-// Appendix
-// Two index version
-//function circleMask(m, n, ci, cj, r) {
-//  const mask = Array.from({length: m}, () => new Array(n).fill(0));
-//  const r2 = r * r;
-//  for (let i = 0; i < m; i++) {
-//    for (let j = 0; j < n; j++) {
-//      const di = i - ci;
-//      const dj = j - cj;
-//      if (di*di + dj*dj <= r2) mask[i][j] = 1;
-//    }
-//  }
-//  return mask;
-//}
