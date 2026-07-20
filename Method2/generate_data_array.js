@@ -93,7 +93,7 @@ const Y = simulate();
 console.log(Y.length, "points; final RU =", Y[Y.length-1]);
 
 // Step 2: Two sets of hard-coded parameters here
-const m = 64, n = 64;   // grid dimensions
+const m = 640, n = 480;   // grid dimensions
 
 // Stores circular region center, radius, and "capacity" as proportion of Rmax
 const circles = [
@@ -138,6 +138,46 @@ for (let k = 0; k < s.length; k++) {   // each pixel
   const sk = s[k];
   for (let t = 0; t < T; t++) {        // each time point
     stack[k * T + t] = sk * Y[t];
+  }
+}
+
+
+// Step 4: Noise
+
+// noise parameters
+const D          = 3.5 * Rmax;   // TOTAL accumulated drift (asymptote), not initial rate
+const tau        = 500;          // settling time constant, s. Larger = more gradual.
+const sigmaOU    = 0.02;         // OU step size — the hard-to-subtract wander
+const thetaOU    = 0.005;        // OU mean-reversion rate (1/s). Small = long correlation
+const decayOU    = true;         // scale OU jitter by the same exp(-t/tau) envelope
+const sigmaPixel = 0.10 * Rmax;  // per-pixel noise: your 5-30% of Rmax range
+
+// Box-Muller - i.e. make it Gaussian
+function gauss(){
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+// --- drift vector: one value per frame, shared by ALL pixels ---
+const dtGrid = 1;                       // must match the 1 s grid from Step 1
+const driftCommon = new Float64Array(T);
+let w = 0;                              // OU state — persists across t for temporal correlation
+for (let t = 0; t < T; t++) {
+  const envelope = decayOU ? Math.exp(-t*dtGrid / tau) : 1;
+  // OU update: restoring pull toward 0, plus a random kick
+  w += -thetaOU * w * dtGrid + sigmaOU * envelope * Math.sqrt(dtGrid) * gauss();
+  driftCommon[t] = D * (1 - Math.exp(-t*dtGrid / tau)) + w;
+}
+
+// --- apply drift + noise to the stack ---
+for (let k = 0; k < s.length; k++) {
+  const sk = s[k];
+  for (let t = 0; t < T; t++) {
+    stack[k*T + t] = sk * Y[t]              // signal
+    + driftCommon[t]          // SAME for every k — common-mode
+    + sigmaPixel * gauss();   // fresh draw for every (k,t) — i.i.d.
   }
 }
 
