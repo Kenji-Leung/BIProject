@@ -256,7 +256,7 @@ function genDilution() {
   $("concSeries").value = pts.join(", ");
   simulate();
 }
-
+/**/
 /* ══════════════════════════════════════════════════════════
    STACK IMAGE — driven entirely by lastData, no file upload
    ══════════════════════════════════════════════════════════ */
@@ -567,7 +567,7 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const headerSize =
     4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
   const frameHeaderSize = 4 + 4 + 4 + 4;
-  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame);
+  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + 4;
  
   const buf  = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
@@ -597,19 +597,20 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   writeFloat32(1.0);   // bfRedGain
   writeFloat32(1.0);   // bfGreenGain
   writeFloat32(1.0);   // bfBlueGain
- 
+
   // Frames for this concentration only
   for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
     const f         = concIdx * nFrames + timeIdx;      // global frame index
     const timestamp = timeOffset + lastData.grid[timeIdx];
     const mat       = getMatrix16(f);
- 
+
     writeInt32(FRAME_TYPE_SPR_GRAY16);
     writeFloat32(timestamp);
     writeInt32(IMG_W);
     writeInt32(IMG_H);
     for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
   }
+  writeInt32(30);
   return buf;
 }
 
@@ -693,9 +694,9 @@ async function downloadAll() {
   const biXml  = await buildBiXml(startTime);
 
   const zip = new JSZip();
-  addStkFilesToFolder(zip.folder("DATA"), baseDate);
+  addStkFilesToFolder(zip.folder("Stacks"), baseDate);
   zip.folder("ROI").file("spr.roi", roiXml);
-  zip.folder("TIME").file("data.bi", biXml);
+  zip.folder("Data").file("data.bi", biXml);
 
   const blob = await zip.generateAsync({type: "blob"});
   const a = Object.assign(document.createElement("a"), {
@@ -711,7 +712,7 @@ async function downloadAll() {
 async function downloadSTK() {
   if (!parsed || !lastData) return;
   const zip = new JSZip();
-  addStkFilesToFolder(zip.folder("DATA"), formatTimestamp());   // one .stk per concentration
+  addStkFilesToFolder(zip.folder("Stack"), formatTimestamp());   // one .stk per concentration
   const blob = await zip.generateAsync({type: "blob"});
   const a = Object.assign(document.createElement('a'), {
     href:     URL.createObjectURL(blob),

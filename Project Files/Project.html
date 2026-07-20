@@ -171,12 +171,19 @@
           </div>
 
           <div class="section">
-            <p class="label">Noise &amp; artifacts</p>
-            <div class="disable"; style="opacity: .5; pointer-events: none;">
-              <label class="check" style="margin-bottom:9px">
-                <input type="checkbox" id="noiseOn"> add detector noise &amp; drift
-              </label>
+            <p class="label">Region 0 — Background</p>
+            <p class="hint">Fills the image behind every region with detector noise.</p>
+            <div class="field" style="margin-top:6px">
+              <label>Noise strength <span class="unit">% of full scale</span></label>
+              <input type="number" id="bgNoise" value="4" step="any" min="0">
             </div>
+          </div>
+
+          <div class="section">
+            <p class="label">Noise &amp; artifacts</p>
+            <label class="check" style="margin-bottom:9px">
+              <input type="checkbox" id="noiseOn"> add detector noise &amp; drift
+            </label>
             <div class="grid2" id="noiseFields" style="opacity:.45; pointer-events:none">
               <div class="field">
                 <label>noise σ <span class="unit">RU</span></label>
