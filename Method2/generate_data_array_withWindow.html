@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SPR 2D Field Viewer</title>
+<style>
+  body { font-family: monospace; background:#111; color:#ddd; margin:20px; }
+  canvas { border:1px solid #444; image-rendering: pixelated; display:block; margin:10px 0; }
+  .row { margin:6px 0; }
+  input[type=range] { width:512px; vertical-align:middle; }
+  #readout { color:#8bc; }
+  label { user-select:none; }
+</style>
+</head>
+<body>
+
+<div class="row">
+  <button id="play">play</button>
+  <input type="range" id="frame" min="0" value="0" step="1">
+</div>
+<div class="row" id="readout">t = 0 s</div>
+<canvas id="cv" width="512" height="512"></canvas>
+<div class="row">
+  <label><input type="checkbox" id="showDrift"> include drift in display</label>
+  &nbsp;&nbsp;
+  <label><input type="checkbox" id="showNoise" checked> include per-pixel noise</label>
+</div>
+<div class="row" id="scale"></div>
+
+<script>
+// ── Step 1: integrate once at Rmax = 1 ──────────────────────────
+const model = "langmuir";
+const ka = 1e6, kd = 1e-3, Rmax = 1;
+const str = "200, 100, 50, 25, 12.5, 6.25";
+const tBase = 30, tAssoc = 120, tDiss = 300;
+
+const vadd = (a,b)=>a.map((v,i)=>v+b[i]);
+const vscale = (a,s)=>a.map(v=>v*s);
+const vsum  = a=>a.reduce((x,y)=>x+y,0);
+
+function simRK4(grid, deriv, y0, Cfun){
+  const out=[]; let y=y0.slice(); out.push(vsum(y));
+  for (let i=1;i<grid.length;i++){
+    const t0=grid[i-1], h=grid[i]-grid[i-1];
+    const C0=Cfun(t0), Cm=Cfun(t0+h/2), C1=Cfun(t0+h);
+    const k1=deriv(y, C0);
+    const k2=deriv(vadd(y,vscale(k1,h/2)), Cm);
+    const k3=deriv(vadd(y,vscale(k2,h/2)), Cm);
+    const k4=deriv(vadd(y,vscale(k3,h )), C1);
+    y = vadd(y, vscale(vadd(vadd(k1,vscale(k2,2)), vadd(vscale(k3,2),k4)), h/6));
+    out.push(vsum(y));
+  }
+  return out;
+}
+
+function makeDeriv(model, RmaxArg){
+  return { size:1, deriv:(y,C)=>{ const R=y[0]; return [ka*C*(RmaxArg-R) - kd*R]; } };
+}
+
+function parseConcs(str){
+  return str.split(/[\s,;]+/).map(s=>parseFloat(s)).filter(v=>Number.isFinite(v)&&v>0);
+}
+
+let grid = [];
+function simulate(){
+  const concsNm = parseConcs(str);
+  const cyc = tAssoc + tDiss;
+  const N = concsNm.length;
+  const total = tBase + N*cyc;
+  const dt = 1;
+  const npts = Math.round(total/dt);
+  grid = []; for(let i=0;i<=npts;i++) grid.push(+(i*dt).toFixed(4));
+
+  const concsM = concsNm.map(c=>c*1e-9);
+  const Cfun = t=>{
+    if (t < tBase) return 0;
+    let k = Math.floor((t - tBase)/cyc);
+    if (k >= N) k = N-1;
+    return ((t - tBase) - k*cyc) < tAssoc ? concsM[k] : 0;
+  };
+  const base = makeDeriv(model, Rmax);
+  return simRK4(grid, base.deriv, new Array(base.size).fill(0), Cfun);
+}
+const Y = simulate();
+const T = Y.length;
+
+// ── Step 2: scalar capacity field ───────────────────────────────
+const m = 64, n = 64;
+const circles = [
+  { ci: 10.5, cj: 20,   r: 5, capacity: 0.8 },
+  { ci: 40,   cj: 15.5, r: 8, capacity: 0.5 },
+  { ci: 25,   cj: 50,   r: 6, capacity: 1.0 },
+];
+
+function circleMask(m, n, ci, cj, r) {
+  const mask = new Float64Array(m * n);
+  const r2 = r * r;
+  for (let i = 0; i < m; i++)
+    for (let j = 0; j < n; j++) {
+      const di = i - ci, dj = j - cj;
+      if (di*di + dj*dj <= r2) mask[i * n + j] = 1;
+    }
+  return mask;
+}
+
+const s = new Float64Array(m * n);
+for (const circle of circles) {
+  const mask = circleMask(m, n, circle.ci, circle.cj, circle.r);
+  const c = circle.capacity;
+  for (let k = 0; k < s.length; k++) s[k] += mask[k] * c;
+}
+
+// ── Step 4: common-mode drift + per-pixel noise ─────────────────
+// PROVISIONAL magnitudes — not literature-calibrated
+const D = 3.5 * Rmax, tau = 500;
+const sigmaOU = 0.02, thetaOU = 0.005, decayOU = true;
+const sigmaPixel = 0.10 * Rmax;
+
+function gauss(){
+  let u=0,v=0;
+  while(u===0) u=Math.random();
+  while(v===0) v=Math.random();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+}
+
+const dtGrid = 1;
+const driftCommon = new Float64Array(T);
+{ let w = 0;
+  for (let t = 0; t < T; t++){
+    const env = decayOU ? Math.exp(-t*dtGrid/tau) : 1;
+    w += -thetaOU*w*dtGrid + sigmaOU*env*Math.sqrt(dtGrid)*gauss();
+    driftCommon[t] = D*(1-Math.exp(-t*dtGrid/tau)) + w;
+  }
+}
+
+// per-pixel noise held separately so display can toggle it
+// (m*n*T floats — fine at 64x64; would generate-on-demand at real frame sizes)
+const eps = new Float32Array(m*n*T);
+for (let k=0;k<eps.length;k++) eps[k] = sigmaPixel*gauss();
+
+// ── Display ─────────────────────────────────────────────────────
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const off = document.createElement('canvas');
+off.width = n; off.height = m;
+const octx = off.getContext('2d');
+const img = octx.createImageData(n, m);
+
+const slider = document.getElementById('frame');
+slider.max = T-1;
+const readout = document.getElementById('readout');
+const scaleEl = document.getElementById('scale');
+const cbDrift = document.getElementById('showDrift');
+const cbNoise = document.getElementById('showNoise');
+
+// fixed scale across all frames so brightness is comparable frame-to-frame
+function computeScale(){
+  let lo = Infinity, hi = -Infinity;
+  let sMax = 0; for (let k=0;k<s.length;k++) if (s[k]>sMax) sMax=s[k];
+  let yMax = 0; for (let t=0;t<T;t++) if (Y[t]>yMax) yMax=Y[t];
+  lo = 0; hi = sMax*yMax;
+  if (cbDrift.checked){ hi += driftCommon[T-1]; }
+  if (cbNoise.checked){ lo -= 3*sigmaPixel; hi += 3*sigmaPixel; }
+  return [lo, hi];
+}
+
+function draw(){
+  const t = +slider.value;
+  const [lo, hi] = computeScale();
+  const span = hi - lo || 1;
+  const d = driftCommon[t];
+  for (let k = 0; k < m*n; k++){
+    let v = s[k]*Y[t];
+    if (cbDrift.checked) v += d;
+    if (cbNoise.checked) v += eps[k*T + t];
+    let g = Math.round(255*(v - lo)/span);
+    g = g<0?0:(g>255?255:g);
+    const p = k*4;
+    img.data[p] = g; img.data[p+1] = g; img.data[p+2] = g; img.data[p+3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(off, 0, 0, cv.width, cv.height);
+  readout.textContent = `t = ${grid[t]} s   |   frame ${t} / ${T-1}   |   unit-capacity R(t) = ${Y[t].toFixed(4)} RU   |   drift = ${d.toFixed(3)} RU`;
+  scaleEl.textContent = `grayscale: black = ${lo.toFixed(3)} RU, white = ${hi.toFixed(3)} RU   |   grid ${m}x${n}, T = ${T}`;
+}
+
+slider.addEventListener('input', draw);
+cbDrift.addEventListener('change', draw);
+cbNoise.addEventListener('change', draw);
+
+let playing = false, raf = null;
+const btn = document.getElementById('play');
+btn.addEventListener('click', ()=>{
+  playing = !playing;
+  btn.textContent = playing ? 'pause' : 'play';
+  if (playing) step(); else cancelAnimationFrame(raf);
+});
+function step(){
+  if (!playing) return;
+  let t = (+slider.value + 8) % T;   // 8 s per tick — full series in ~5 s
+  slider.value = t;
+  draw();
+  raf = requestAnimationFrame(step);
+}
+
+draw();
+</script>
+</body>
+</html>
