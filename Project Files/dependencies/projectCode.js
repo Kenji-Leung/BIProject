@@ -438,7 +438,7 @@ function u8ToBase64(u8) {
   }
   return btoa(binary);
 }
- 
+
 async function deflateRawCompress(u8) {
   const cs = new CompressionStream('deflate-raw');
   const writer = cs.writable.getWriter();

@@ -567,7 +567,7 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const headerSize =
     4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
   const frameHeaderSize = 4 + 4 + 4 + 4;
-  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + 4;
+  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + (6*4);
  
   const buf  = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
@@ -610,7 +610,12 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
     writeInt32(IMG_H);
     for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
   }
-  writeInt32(30);
+  writeInt32(1000);
+  writeFloat32(30);
+  writeInt32(101);
+  writeInt32(1000);
+  writeFloat32(120);
+  writeInt32(102);
   return buf;
 }
 
