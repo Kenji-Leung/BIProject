@@ -4,26 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PaintCanvas — interactive region painter</title>
-    <style>
-        :root { --bd:#cbd0d6; --mut:#667; --bg:#f6f7f9; }
-        * { box-sizing: border-box; }
-        body { margin: 0; font: 14px/1.5 system-ui, sans-serif; color: #222; background: var(--bg); }
-        .wrap { display: flex; gap: 24px; padding: 24px; flex-wrap: wrap; }
-        h1 { font-size: 18px; margin: 0 0 4px; }
-        .sub { color: var(--mut); margin: 0 0 16px; }
-        .panel { display: flex; flex-direction: column; gap: 14px; min-width: 220px; }
-        .field { display: flex; flex-direction: column; gap: 4px; }
-        label { font-weight: 600; font-size: 12px; }
-        input, select, button { font: inherit; padding: 6px 8px; border: 1px solid var(--bd); border-radius: 6px; background: #fff; }
-        button { cursor: pointer; }
-        button.primary { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-        .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
-        .stage { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-        canvas { border: 1px solid var(--bd); background: #000; image-rendering: pixelated; }
-        .hint { color: var(--mut); font-size: 12px; max-width: 320px; }
-        code { background: #eef1f4; padding: 1px 4px; border-radius: 4px; }
-        #log { font-family: ui-monospace, monospace; font-size: 12px; color: var(--mut); }
-    </style>
+    <link rel="stylesheet" href="./dependencies/style.css">
+    <script src="./dependencies/CanvasPaint.js" defer></script>
 </head>
     <body>
     <div class="wrap">
@@ -67,13 +49,6 @@
             <button class="primary" id="exportBtn">Export masks (JSON)</button>
         </div>
 
-        <p class="hint">
-            Each region is a separate pixel mask. Draw on the canvas to paint the
-            selected region; switch regions to paint another. "Brightness view"
-            swaps the per-region colours for a grayscale driven by a demo
-            <code>valueProvider</code> — that's the hook you'd wire to your SPR
-            signal so shape (mask) and brightness (constants) stay decoupled.
-        </p>
         <div id="log"></div>
         </div>
 
@@ -83,66 +58,5 @@
         </div>
     </div>
 
-    <script type="module">
-        import { PaintCanvas } from './dependencies/CanvasPaint.js';
-
-        const canvas = document.getElementById('paint');
-        const pc = new PaintCanvas(canvas, { width: 480, height: 640, brushSize: 20, regionCount: 3 });
-
-        const $ = id => document.getElementById(id);
-        const log = msg => { $('log').textContent = msg; };
-
-        // A stand-in for "brightness from constants": region idx -> 0..1.
-        // Here just a fixed ramp so you can see the grayscale view working.
-        const demoValue = idx => [0.9, 0.55, 0.25, 0.7, 0.4][(idx - 1) % 5];
-        let brightnessView = false;
-
-        function rebuildRegionSelect() {
-        const sel = $('regionSelect');
-        const prev = sel.value;
-        sel.innerHTML = '';
-        for (let i = 1; i <= pc.regionCount; i++) {
-            const o = document.createElement('option');
-            o.value = i; o.textContent = 'Region ' + i;
-            sel.appendChild(o);
-        }
-        sel.value = (prev && +prev <= pc.regionCount) ? prev : '1';
-        pc.setActiveRegion(sel.value);
-        }
-
-        $('regionCount').addEventListener('input', e => {
-        pc.setRegionCount(parseInt(e.target.value, 10) || 1);
-        rebuildRegionSelect();
-        });
-        $('regionSelect').addEventListener('change', e => pc.setActiveRegion(e.target.value));
-        $('brushSize').addEventListener('input', e => pc.setBrushSize(e.target.value));
-        $('paintMode').addEventListener('change', e => pc.setMode(e.target.value));
-        $('clearRegion').addEventListener('click', () => pc.clearRegion(pc.activeRegion));
-        $('clearAll').addEventListener('click', () => pc.clearAll());
-
-        $('tintToggle').addEventListener('click', () => {
-        brightnessView = !brightnessView;
-        pc.setValueProvider(brightnessView ? demoValue : null);
-        log(brightnessView ? 'Brightness view: grayscale from valueProvider(idx).'
-                            : 'Region view: each mask shown in its own colour.');
-        });
-
-        $('exportBtn').addEventListener('click', () => {
-        const masks = pc.exportMasks();
-        const counts = Object.entries(masks)
-            .map(([k, v]) => `R${k}:${v.reduce((a, b) => a + b, 0)}px`).join('  ');
-        log('Exported masks -> ' + (counts || 'nothing painted yet'));
-        console.log('exportMasks():', masks);
-        });
-
-        // React to edits (this is where your app would re-run its pipeline).
-        pc.on('change', ({ region }) => {
-        const painted = pc.getMask(pc.activeRegion).reduce((a, b) => a + b, 0);
-        log(`Region ${region} edited · active region painted pixels: ${painted}`);
-        });
-
-        rebuildRegionSelect();
-        log('Ready — pick a region and draw on the canvas.');
-    </script>
     </body>
     </html>
