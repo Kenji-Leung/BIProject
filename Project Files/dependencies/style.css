@@ -144,6 +144,12 @@ h1 { font-size: 20px; font-weight: 500; margin-bottom: 0.25rem; }
   
 }
 
+.seed::-webkit-inner-spin-button,
+.seed::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+
 .field label .unit {
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
