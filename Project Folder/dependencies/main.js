@@ -209,12 +209,12 @@ export const REGION_X = IMG_W / 2, REGION_Y = IMG_H / 2, REGION_R = 140;
 
 function updateStackImage() {
   const results = $("results");
-  if (!parsed || !parsed.regions || parsed.nSpots === 0 || parsed.nFrames === 0) {
+  if (!state.parsed || !state.parsed.regions || state.parsed.nSpots === 0 || state.parsed.nFrames === 0) {
     if (results) results.style.display = "none";
     return;
   }
 
-  const totalFrames = parsed.nFrames * parsed.nSpots;
+  const totalFrames = state.parsed.nFrames * state.parsed.nSpots;
   const slider = $("frame-slider");
   if (slider) {
     slider.max = totalFrames - 1;
@@ -223,22 +223,22 @@ function updateStackImage() {
 
   const totalEl = $("total-frames");
   if (totalEl) totalEl.textContent =
-    `${totalFrames}  (${parsed.nFrames} time points × ${parsed.nSpots} concentrations)`;
+    `${totalFrames}  (${state.parsed.nFrames} time points × ${state.parsed.nSpots} concentrations)`;
   if (results) results.style.display = "block";
   renderPreview(slider ? +slider.value : 0);
 }
 
 export function decodeFrame(globalFrame) {
   return {
-    concIdx: Math.floor(globalFrame / parsed.nFrames),
-    timeIdx: globalFrame % parsed.nFrames
+    concIdx: Math.floor(globalFrame / state.parsed.nFrames),
+    timeIdx: globalFrame % state.parsed.nFrames
   };
 }
 
 /* Brightness (0..MAX16) for one region at one (concIdx, timeIdx). */
 function regionBrightness16(rg, concIdx, timeIdx) {
   if (concIdx >= rg.traces.length) return 0;
-  const { globalMin, globalMax } = parsed;
+  const { globalMin, globalMax } = state.parsed;
   const denom = (globalMax - globalMin) || 1;
   const ru    = rg.traces[concIdx][timeIdx];
   const norm  = Math.max(0, (ru - globalMin) / denom);
@@ -262,9 +262,9 @@ function stampDisk(mat, cx, cy, r, val) {
 /* Full IMG_H × IMG_W Uint16 frame: black background + the region's disk. */
 export function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
-  if (!parsed || !parsed.regions) return mat;
+  if (!state.parsed || !state.parsed.regions) return mat;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  for (const rg of parsed.regions) {
+  for (const rg of state.parsed.regions) {
     const b16 = regionBrightness16(rg, concIdx, timeIdx);
     stampDisk(mat, rg.x, rg.y, rg.r, b16);       // disk sits on top of the noise
   }
@@ -273,7 +273,7 @@ export function getMatrix16(globalFrame) {
 
 /* Preview is built from the SAME matrix as the exported .stk frame. */
 function renderPreview(globalFrame) {
-  if (!parsed || !parsed.regions) return;
+  if (!state.parsed || !state.parsed.regions) return;
   const canvas = $("img-canvas");
   if (!canvas) return;
   canvas.width = IMG_W; canvas.height = IMG_H;
@@ -294,9 +294,9 @@ function renderPreview(globalFrame) {
 
   const concTag = $("conc-tag");
   if (concTag) {
-    const cLabel = concIdx < parsed.concs.length ? fmtConc(parsed.concs[concIdx])
+    const cLabel = concIdx < state.parsed.concs.length ? fmtConc(state.parsed.concs[concIdx])
                                                  : `spot ${concIdx + 1}`;
-    concTag.textContent = `${cLabel}  —  time point ${timeIdx} / ${parsed.nFrames - 1}`;
+    concTag.textContent = `${cLabel}  —  time point ${timeIdx} / ${state.parsed.nFrames - 1}`;
   }
 }
 
