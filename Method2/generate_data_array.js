@@ -112,7 +112,7 @@ const m = 320, n = 240;              // 640 rows (tall) x 480 cols (wide) our de
 
 const capacityBins = [0.4, 0.6, 0.8, 1.0];
 
-// Hard-coded paremeters governing placement
+// Hard-coded parameters governing placement
 const targetConfluence = 0.50;       // representing a union of pixels
 const rMin = 15, rMax = 25;          // radius range, pixels
 const MAX_CIRCLES = 5000;            // a cap in iterations to prevent a hangup
@@ -199,14 +199,14 @@ for (let k = 0; k < s.length; k++){
 // This now incorporates its own seed for reproducible noise
 
 // Hard-Coded Noise Parameters:
-const D          = 3.5 * Rmax;   // TOTAL accumulated drift (asymptote), not initial rate
-const tau        = 500;          // settling time constant, s. Larger = more gradual.
+const D          = 3.5 * Rmax;   // TOTAL accumulated drift
+const tau        = 500;          // settling time, s. Larger = more gradual.
 const sigmaOU    = 0.02;         // OU step size — the hard-to-subtract wander
 const thetaOU    = 0.005;        // OU mean-reversion rate (1/s). Small = long correlation
 const decayOU    = true;         // scale OU jitter by the same exp(-t/tau) envelope
-const sigmaPixel = 0.10 * Rmax;  // per-pixel noise: your 5-30% of Rmax range
+const sigmaPixel = 0.10 * Rmax;  // per-pixel noise: 5-30% of Rmax range
 
-const NOISE_SEED = 67890;
+const NOISE_SEED = 67890;        // As above, may use any integer in the given range.
 const rngNoise = mulberry32(NOISE_SEED);
 
 // Box-Muller transform
