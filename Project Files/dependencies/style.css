@@ -1,5 +1,5 @@
 /* ============================================================
-   combined.css — merged from two style sources
+   combined.css — cleaned up for the SPR Stack Preview tool
    ============================================================ */
 
 /* ---------- design tokens ---------- */
@@ -35,63 +35,32 @@ body {
   padding: 2rem;
 }
 
-mono, .mono { font-family: "IBM Plex Mono", monospace; }
-
-/* ---------- page wrapper ---------- */
-.page {
-  max-width: 680px;
-  margin: 0 auto;
-}
-
-/* ---------- app header ---------- */
-header.app {
-  padding: 26px 32px 22px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 24px;
-}
-
-header.app h1 {
-  font-family: "Fraunces", serif;
-  font-weight: 600;
-  font-size: 30px;
-  letter-spacing: -.01em;
-  margin: 0;
-}
-
-header.app h1 .dot { color: var(--accent); }
-
-header.app .sub {
-  color: var(--muted);
-  font-size: 13.5px;
-  font-family: "IBM Plex Mono", monospace;
-  letter-spacing: .01em;
-}
-
-/* simple page heading (second stylesheet) */
 h1 { font-size: 20px; font-weight: 500; margin-bottom: 0.25rem; }
-p.sub { font-size: 13px; color: var(--muted); margin-bottom: 1.5rem; }
 
 /* ---------- layout ---------- */
-.layout {
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  gap: 0;
-  align-items: stretch;
-  min-height: calc(100vh - 90px);
+.container {
+  display: flex;
+  align-items: flex-start; /* keep each column's own height so .sidebar isn't stretched full-length — required for position:sticky to have room to follow scroll */
+  gap: 20px;
+  padding: 20px;
 }
 
-/* ---------- control panel ---------- */
-aside.controls {
+.controls {
   border-right: 1px solid var(--line);
   padding: 22px 24px 40px;
   background: linear-gradient(180deg, #faf7f0 0%, var(--paper) 100%);
-  overflow: auto;
 }
 
+.sidebar {
+  width: fit-content;
+  position: sticky;
+  top: 20px;
+  height: fit-content;
+  background-color: #f4f4f4;
+  padding: 10;
+}
+
+/* ---------- section ---------- */
 .section { margin-bottom: 24px; }
 
 .section > .label {
@@ -114,6 +83,29 @@ aside.controls {
   background: var(--line-soft);
 }
 
+
+.group {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 20px 6px;
+  margin-bottom: 22px;
+}
+
+.group > .group-title {
+  font-family: "Fraunces", serif;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ink);
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+
+.group > .section:last-child { margin-bottom: 6px; }
+
 /* ---------- card ---------- */
 .card {
   background: var(--panel);
@@ -133,14 +125,23 @@ aside.controls {
   margin-bottom: 8px;
 }
 
+.check {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 4px;
+}
 /* ---------- form fields ---------- */
-.field { margin-bottom: 11px; }
+.field { 
+  margin-bottom: 10px;  
+}
 
 .field label {
   display: block;
   font-size: 12.5px;
   color: var(--muted);
   margin-bottom: 3px;
+  
 }
 
 .field label .unit {
@@ -182,7 +183,7 @@ select {
   padding-right: 30px;
 }
 
-/* ---------- range row (second stylesheet) ---------- */
+/* ---------- range row ---------- */
 .row {
   display: flex;
   align-items: center;
@@ -233,7 +234,7 @@ select {
 .btn.ghost { background: transparent; color: var(--accent); }
 .btn.ghost:hover { background: var(--accent-soft); color: var(--accent-deep); }
 
-/* native <button> elements (second stylesheet) */
+/* native <button> elements */
 button {
   padding: 8px 18px;
   font-size: 13px;
@@ -274,70 +275,7 @@ button.pri:hover:not(:disabled) { opacity: 0.88; }
 /* ---------- hint text ---------- */
 .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
 
-/* ---------- plot / viz panel ---------- */
-main.viz {
-  padding: 24px 28px 32px;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.readouts { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
-
-.stat {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  min-width: 120px;
-  box-shadow: var(--shadow);
-}
-
-.stat .k {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10.5px;
-  letter-spacing: .1em;
-  color: var(--muted);
-  margin-bottom: 2px;
-}
-
-.stat .v {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 18px;
-  font-weight: 500;
-  color: var(--ink);
-}
-
-.stat .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
-.stat.accent .v { color: var(--accent-deep); }
-
-#plot {
-  flex: 1;
-  min-height: 440px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 6px;
-}
-
-.export-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.export-row .spacer { flex: 1; }
-
-.footnote {
-  font-size: 11.5px;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", monospace;
-}
-
-/* ---------- canvas ---------- */
+/* ---------- canvas / frame preview ---------- */
 canvas {
   display: block;
   border: 1px solid var(--line);
@@ -353,7 +291,7 @@ canvas {
   text-align: center;
 }
 
-/* ---------- progress bar ---------- */
+/* ---------- progress / status (used by download script) ---------- */
 .progress-bar {
   height: 3px;
   background: var(--line);
@@ -369,14 +307,14 @@ canvas {
   transition: width 0.1s;
 }
 
-/* ---------- status / results ---------- */
 .status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* ---------- results panel ---------- */
 #results { display: none; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 880px) {
-  .layout { grid-template-columns: 1fr; }
-  aside.controls { border-right: none; border-bottom: 1px solid var(--line); }
-  header.app { padding: 20px 20px 16px; }
-  main.viz { padding: 18px 16px 24px; }
+  .container { flex-direction: column; }
+  .controls { border-right: none; border-bottom: 1px solid var(--line); }
+  .sidebar { position: static; width: auto; }
 }
