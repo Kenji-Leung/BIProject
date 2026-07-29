@@ -312,4 +312,4 @@ async function downloadSTK() {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-on("downloadAll", "click", downloadAll);
+document.getElementById("downloadAll").addEventListener("click", downloadAll);
