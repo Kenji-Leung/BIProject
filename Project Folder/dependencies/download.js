@@ -76,7 +76,7 @@ function formatTimestamp(when = new Date()) {
 
 
 async function encodeTimeInput() {
-  const total = state.state.parsed.nFrames * state.state.parsed.nSpots;
+  const total = state.parsed.nFrames * state.parsed.nSpots;
   const f32 = new Float32Array(total);
   for (let g = 0; g < total; g++) f32[g] = g + 10;
   const dataB64 = await encodeCompressedData(f32);
