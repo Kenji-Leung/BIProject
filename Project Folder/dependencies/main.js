@@ -260,7 +260,7 @@ function stampDisk(mat, cx, cy, r, val) {
 }
 
 /* Full IMG_H × IMG_W Uint16 frame: black background + the region's disk. */
-function getMatrix16(globalFrame) {
+export function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
   if (!parsed || !parsed.regions) return mat;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
