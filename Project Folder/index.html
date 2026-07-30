@@ -1,13 +1,14 @@
+<!DOCTYPE html>
 <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="./dependencies/style.css">
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-        <script type="module" src="./dependencies/download.js"></script>
+        <script type="module" src="./dependencies/main.js"></script>
         <script type="module" src="./dependencies/kinetics.js"></script>
         <script type="module" src="./dependencies/render.js"></script>
-        <script type="module" src="./dependencies/main.js"></script>
+        <script type="module" src="./dependencies/download.js"></script>
     </head>
     <body>
       <div class="container">
@@ -164,7 +165,7 @@
             <p class="label">Analyte concentrations</p>
             <div class="field">
               <label>Series <span class="unit">nM, comma/space separated</span></label>
-              <textarea id="concSeries">200, 100, 50, 25, 12.5, 6.25</textarea>
+              <textarea id="concSeries">6.25, 12, 25, 50, 100, 200</textarea>
             </div>
           </div>
 
@@ -205,6 +206,7 @@
         </main>
         <aside class="sidebar">
             <h1>SPR Stack Preview</h1>
+            <div id="status" class="status"></div>
               <div class="label">Frame preview</div>
               <div class="row">
                 <button class="pri" id="play">Play</button>

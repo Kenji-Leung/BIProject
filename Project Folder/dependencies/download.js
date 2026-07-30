@@ -1,8 +1,5 @@
-import { state, setStatus, $ } from './main.js';
-import {
-  IMG_W, IMG_H, getMatrix16, decodeFrame,
-  fmtConc, findPeakInjectionFrame
-} from './kinetics.js';
+import { state, setStatus, $, fmtConc, IMG_W, IMG_H } from './main.js';
+import { getMatrix16, decodeFrame, findPeakInjectionFrame } from './render.js';
 
 function u8ToBase64(u8) {
   const CHUNK = 0x8000;

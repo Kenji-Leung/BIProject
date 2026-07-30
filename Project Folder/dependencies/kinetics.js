@@ -1,6 +1,9 @@
 'use strict';
 
-import { $, on, setStatus, state, notifyDataUpdated, onDataUpdated } from './main.js';
+import {
+  $, on, setStatus, state, notifyDataUpdated,
+  REGION_X, REGION_Y, REGION_R
+} from './main.js';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
@@ -95,8 +98,6 @@ function withTransport(base, kt) {
 const parseConcs = str =>
   (str || "").split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
 
-export const fmtConc = Cnm => (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
-
 /* ── Model metadata ──────────────────────────────────────── */
 const MODEL_HINTS = {
   langmuir:   "Simplest case: one analyte binding one immobilised ligand.",
@@ -104,7 +105,6 @@ const MODEL_HINTS = {
   twostate:   "Binding followed by a conformational change that locks the complex — note the slow dissociation.",
   bivAnalyte: "The analyte may, at sufficient density, bind two membrane receptors simultaneously."
 };
-
 
 const MODEL_INPUT_IDS = [
   "model", "ka", "kd", "ka1", "kd1", "ka2", "kd2",
@@ -135,7 +135,6 @@ function simulate() {
   const base   = makeDeriv(model, Rmax);
   const engine = ($("mtlOn") && $("mtlOn").checked) ? withTransport(base, +$("kt").value || 0) : base;
 
-
   const concsM = concs.map(Cnm => Cnm * 1e-9);
   const Cfun = t => {
     if (t < tBase) return 0;
@@ -147,7 +146,6 @@ function simulate() {
 
   let Y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
   if (noiseOn) Y = Y.map((v, i) => v + noiseSd * gauss() + drift * (grid[i] / total));
-
 
   const nFrames = Math.round(cyc) + 1;
   const traces = concs.map((_, k) => {
@@ -164,6 +162,7 @@ function simulate() {
     if (v > gMax) gMax = v;
   }));
   if (!isFinite(gMin)) { gMin = 0; gMax = 0; }
+
 
   const localGrid = Array.from({ length: nFrames }, (_, i) => i);
 
@@ -201,131 +200,6 @@ function genDilution() {
 }
 
 /* ══════════════════════════════════════════════════════════
-   STACK IMAGE — composites the region's disk into each frame
-   (Slated to move into its own preview.js — left here for now
-   while main.js is the first split.)
-   ══════════════════════════════════════════════════════════ */
-
-export const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
-
-/* Fixed placement for the single simulated region — previously set via
-   the region-select/place UI (#coordX, #coordY, #radius), now a constant. */
-export const REGION_X = IMG_W / 2, REGION_Y = IMG_H / 2, REGION_R = 140;
-
-function updateStackImage() {
-  const results = $("results");
-  if (!state.parsed || !state.parsed.regions || state.parsed.nSpots === 0 || state.parsed.nFrames === 0) {
-    if (results) results.style.display = "none";
-    return;
-  }
-
-  const totalFrames = state.parsed.nFrames * state.parsed.nSpots;
-  const slider = $("frame-slider");
-  if (slider) {
-    slider.max = totalFrames - 1;
-    if (+slider.value > totalFrames - 1) slider.value = 0;
-  }
-
-  const totalEl = $("total-frames");
-  if (totalEl) totalEl.textContent =
-    `${totalFrames}  (${state.parsed.nFrames} time points × ${state.parsed.nSpots} concentrations)`;
-  if (results) results.style.display = "block";
-  renderPreview(slider ? +slider.value : 0);
-}
-
-export function decodeFrame(globalFrame) {
-  return {
-    concIdx: Math.floor(globalFrame / state.parsed.nFrames),
-    timeIdx: globalFrame % state.parsed.nFrames
-  };
-}
-
-/* Brightness (0..MAX16) for one region at one (concIdx, timeIdx). */
-function regionBrightness16(rg, concIdx, timeIdx) {
-  if (concIdx >= rg.traces.length) return 0;
-  const { globalMin, globalMax } = state.parsed;
-  const denom = (globalMax - globalMin) || 1;
-  const ru    = rg.traces[concIdx][timeIdx];
-  const norm  = Math.max(0, (ru - globalMin) / denom);
-  return Math.round(norm * MAX16);
-}
-
-/* Stamp a filled disk of value `val` centred at (cx, cy) with radius r. */
-function stampDisk(mat, cx, cy, r, val) {
-  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
-  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
-  const r2 = r * r;
-  for (let py = y0; py <= y1; py++) {
-    for (let px = x0; px <= x1; px++) {
-      const dx = px - cx, dy = py - cy;
-      if (dx * dx + dy * dy <= r2) mat[py * IMG_W + px] = val;
-    }
-  }
-}
-
-/* Full IMG_H × IMG_W Uint16 frame: black background + the region's disk. */
-export function getMatrix16(globalFrame) {
-  const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
-  if (!state.parsed || !state.parsed.regions) return mat;
-  const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  for (const rg of state.parsed.regions) {
-    const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    stampDisk(mat, rg.x, rg.y, rg.r, b16);       // disk sits on top of the noise
-  }
-  return mat;
-}
-
-/* Preview is built from the SAME matrix as the exported .stk frame. */
-function renderPreview(globalFrame) {
-  if (!state.parsed || !state.parsed.regions) return;
-  const canvas = $("img-canvas");
-  if (!canvas) return;
-  canvas.width = IMG_W; canvas.height = IMG_H;
-
-  const mat = getMatrix16(globalFrame);
-  const ctx = canvas.getContext("2d");
-  const img = ctx.createImageData(IMG_W, IMG_H);
-  for (let i = 0; i < mat.length; i++) {
-    const g = mat[i] >> 8;            // 16-bit -> 8-bit grey
-    const j = i * 4;
-    img.data[j] = g; img.data[j + 1] = g; img.data[j + 2] = g; img.data[j + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-
-  const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  const frameVal = $("frame-val");
-  if (frameVal) frameVal.textContent = globalFrame;
-
-  const concTag = $("conc-tag");
-  if (concTag) {
-    const cLabel = concIdx < state.parsed.concs.length ? fmtConc(state.parsed.concs[concIdx])
-                                                 : `spot ${concIdx + 1}`;
-    concTag.textContent = `${cLabel}  —  time point ${timeIdx} / ${state.parsed.nFrames - 1}`;
-  }
-}
-
-export function findPeakInjectionFrame() {
-  // Per-concentration local axis now starts at each injection's own
-  // association onset (t=0), not a shared baseline — see simulate().
-  const tA = 0;
-  const tD = +$("tAssoc").value;
-  const { regions, nFrames, nSpots, times } = state.parsed;
-
-  let bestFrame = 0, bestRU = -Infinity;
-  for (let f = 0; f < nFrames * nSpots; f++) {
-    const { concIdx, timeIdx } = decodeFrame(f);
-    const t = times[timeIdx];
-    if (t < tA || t >= tD) continue;
-    let ru = 0;
-    for (const rg of regions)
-      if (concIdx < rg.traces.length) ru = Math.max(ru, rg.traces[concIdx][timeIdx]);
-    if (ru > bestRU) { bestRU = ru; bestFrame = f; }
-  }
-  return { frame: bestFrame, ru: bestRU };
-}
-
-/* ══════════════════════════════════════════════════════════
    EVENT LISTENERS
    ══════════════════════════════════════════════════════════ */
 
@@ -360,12 +234,6 @@ on("noiseOn", "change", () => {
 });
 
 on("genDil", "click", genDilution);
-on("frame-slider", "input", function () { renderPreview(+this.value); });
-
-// Whenever state.parsed/state.lastData is (re)populated — by simulate()
-// here, or eventually by a real-data loader elsewhere — redraw the stack
-// image. No direct import needed between the producer and this listener.
-onDataUpdated(updateStackImage);
 
 /* ── Init ────────────────────────────────────────────────── */
 setModelVisibility();

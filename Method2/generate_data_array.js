@@ -1,37 +1,41 @@
-// Very basic version of a different way of generating two-dimentionsal data.
-// This prototype does not incorporate user-interface - all parameters hard-coded
+// ═══════════════════════════════════════════════════════════════
+// Very basic version of a way of generating two-dimensional data.
 // Advantages of this method:
 // Integrates one time per model/set of parameters.
-// Adding any number of randomly generated circles / overlapping circles is fast and computationally inexpensive
-// Adding edge dominance is a simple extension
-// Incorporating drift in kinetic parameters is also reasonable, and can be done inexpensively
-
+// Adding any number of randomly generated circles / overlapping circles
+//   is fast and computationally inexpensive.
+// Adding edge dominance is a simple extension.
+// Incorporating drift in kinetic parameters is also reasonable, and can
+//   be done inexpensively.
+//
 // Outline of what this does, assuming one dynamic present:
-// Step 1: Integrate one time (for whole time series, incorporating all concentrations) at RMax = 1. Set aside result Y
-// Step 2: Uses seeded PRNG to distribute random circular regions, with random radii and capacity,
-// which then forms the scalar capacity field
-// Step 3: The final result is the outer product of the scalar field and Y, result is a flat vector of length m*n*t which corresponds to the
-//  mxnxT array. This now includes the implementation of edge dominance
-// Step 4: Generation and addition of noise and drift, using the same PRNG procedure with a different seed, according to specifications
-
-// Next steps
+// Step 1: Integrate one time (for whole time series, incorporating all
+//   concentrations) at RMax = 1. Set aside result Y.
+// Step 2: Uses seeded PRNG to distribute random circular regions, with
+//   random radii and capacity, which then forms the scalar capacity field.
+// Step 3: The final result is the outer product of the scalar field and Y
+//   — here computed on demand per displayed frame rather than materialized
+//   as a full m*n*T array, since this version renders interactively.
+//   This includes the implementation of edge dominance.
+// Step 4: Generation and addition of noise and drift, using the same PRNG
+//   procedure with a different seed, according to specifications.
+//
+// Next steps:
 // 1. Implement edge dominance (ask about setting a floor in the center) - Complete
 // 2. Implement all models EXCEPT Bivalent analyte
 // 3. Implement Bivalent Analyte
 // 4. Kinetic Heterogeneity
 // 5. Model Heterogeneity
-
-// QOL Steps
-// It would be good to make dt declared in one place alone
-
-// ═══════════════════════════════════════════════════════════════
-// Step 1: Integrate once at Rmax = 1
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// Step 1: integrate once at Rmax = 1
+// ═══════════════════════════════════════════════════════════════
 const model = "langmuir";
 const ka = 1e6, kd = 1e-3, Rmax = 1;
 const str = "200, 100, 50, 25, 12.5, 6.25";
 const tBase = 30, tAssoc = 120, tDiss = 300;
+const dt = 2;                 // TIME RESOLUTION (s) — single source of truth
 
 const vadd = (a,b)=>a.map((v,i)=>v+b[i]);
 const vscale = (a,s)=>a.map(v=>v*s);
@@ -60,14 +64,14 @@ function parseConcs(str){
   return str.split(/[\s,;]+/).map(s=>parseFloat(s)).filter(v=>Number.isFinite(v)&&v>0);
 }
 
+let grid = [];
 function simulate(){
   const concsNm = parseConcs(str);
   const cyc = tAssoc + tDiss;
   const N = concsNm.length;
   const total = tBase + N*cyc;
-  const dt = 2; // SET TIME RESOLUTION HERE
   const npts = Math.round(total/dt);
-  const grid=[]; for(let i=0;i<=npts;i++) grid.push(+(i*dt).toFixed(4));
+  grid = []; for(let i=0;i<=npts;i++) grid.push(+(i*dt).toFixed(4));
 
   const concsM = concsNm.map(c=>c*1e-9);
   const Cfun = t=>{
@@ -81,14 +85,10 @@ function simulate(){
 }
 const Y = simulate();
 const T = Y.length;
-console.log(Y.length, "points; final RU =", Y[Y.length-1]);
 
 // ═══════════════════════════════════════════════════════════════
-// Step 2: Implement Seeded Pseudo-randomness
+// Seeded PRNG (reproducible). Separate streams for surface vs noise.
 // ═══════════════════════════════════════════════════════════════
-
-// This is an alternative to math.random, but exactly reproducible given the same seed.
-// seed can be any non-negative integer between 0 and 2^{32}-1
 function mulberry32(seed){
   let a = seed >>> 0;
   return function(){
@@ -98,61 +98,48 @@ function mulberry32(seed){
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const SURFACE_SEED = 12345;          // change this to regenerate a different surface
+const SURFACE_SEED = 12345;
+const NOISE_SEED   = 67890;
 const rngSurface = mulberry32(SURFACE_SEED);
-// This is a function. call this to get a pseudo-random number /in [0,1).  Every call gets a number, and then the sequence advances to a new pseudo-random number.
 
 // ═══════════════════════════════════════════════════════════════
-// Step 3: build the scalar capacity field according to pseudo-random center coordinates, radii, and capacities, until a confluence is achieved.
+// Step 2: capacity field via seeded random placement, MAX composition,
+//   with EDGE DOMINANCE.
+//   Small demonstration window at TRUE instrument scale — radii are
+//   real pixels, NOT a downscaled thumbnail of the full surface.
 // ═══════════════════════════════════════════════════════════════
-
-const m = 320, n = 240;              // 640 rows (tall) x 480 cols (wide) our default window
-
-// Quantize capacities - not necessary for Langmuir, but will be important for bivalent analyte.
-
+const m = 320, n = 240;             // 320 rows (tall) x 240 cols (wide)
 const capacityBins = [0.4, 0.6, 0.8, 1.0];
+const targetConfluence = 0.50;
+const rMin = 15, rMax = 25;         // real instrument pixels
+const MAX_CIRCLES = 5000;
 
-// Hard-coded parameters governing placement
-const targetConfluence = 0.50;       // representing a union of pixels
-const rMin = 15, rMax = 25;          // radius range, pixels
-const MAX_CIRCLES = 5000;            // a cap in iterations to prevent a hangup
+// Edge dominance: within a circle the response weight rises from a floor
+// at the center to 1.0 at the rim, quadratically. Floor is a fraction of
+// the rim value, applied relative to each cell's own capacity.
+//   profile(d) = floor + (1-floor)*(d/r)^2
+const edgeFloor = 0.15;             // center is 15% of rim weight
 
-// Begin Implementation of Edge dominance
-// There is a capacity floor at the center, a hard-coded fraction of rim value.
-// Signal intensity declines quadratically from the rim to center according to:  profile(d) = floor + (1-floor)*(d/r)^2
-
-const edgeFloor = 0.15;              // This is the pre-defined percentage of rim intensity at the center
-
-// covered[k] flags 1/0 whether a pixel is covered, so that we may know when confluence is attained.
 const covered = new Uint8Array(m * n);
 let coveredCount = 0;
 
-// New component of each element of scalar capacity field as follows:
 // s[k] = effective capacity weight = binValue * edgeProfile(distance).
-
-// initialize scalar capacity field:
+//   Continuous now (no longer four-valued), because the profile is continuous.
 const s = new Float32Array(m * n);
-
-// binField[k] = index of the bin whose cell WON the max at pixel k.
-// This will be important for implementing the bivalent analyte model.
+// binField[k] = index of the bin whose cell WON the max at pixel k (-1 = uncovered).
+//   Stays discrete; the future bivalent path uses it to select a dynamic per pixel.
 const binField = new Int8Array(m * n).fill(-1);
+const circles = [];
 
-const circles = [];                  // record of what was placed
-
-// this function takes the pseudo-random stream and sets the centers, radius, and capacity, then stamps that onto the field.
 function placeOneCircle(){
-  // draw geometry + capacity from the seeded stream
-  const ci  = rngSurface() * m;                          // center row (real-valued)
-  const cj  = rngSurface() * n;                          // center col
-  const r   = rMin + rngSurface() * (rMax - rMin);       // radius
+  const ci  = rngSurface() * m;
+  const cj  = rngSurface() * n;
+  const r   = rMin + rngSurface() * (rMax - rMin);
   const cap = capacityBins[(rngSurface() * capacityBins.length) | 0];
   const binIdx = capacityBins.indexOf(cap);
-
   const r2 = r * r;
-  // bounding box, clamped to grid — only visit pixels near this circle
   const iLo = Math.max(0, Math.floor(ci - r)), iHi = Math.min(m-1, Math.ceil(ci + r));
   const jLo = Math.max(0, Math.floor(cj - r)), jHi = Math.min(n-1, Math.ceil(cj + r));
-
   for (let i = iLo; i <= iHi; i++){
     for (let j = jLo; j <= jHi; j++){
       const di = i - ci, dj = j - cj;
@@ -173,69 +160,117 @@ function placeOneCircle(){
   circles.push({ ci, cj, r, capacity: cap, binIdx });
 }
 
-// continue to place until either union coverage hits the target or iter > MAX_CIRCLES
 let iter = 0;
 while (coveredCount / (m*n) < targetConfluence && iter < MAX_CIRCLES){
-  placeOneCircle();
-  iter++;
+  placeOneCircle(); iter++;
 }
 const achievedConfluence = coveredCount / (m*n);
-console.log(`placed ${circles.length} circles; confluence target ${targetConfluence}, achieved ${achievedConfluence.toFixed(4)}${iter>=MAX_CIRCLES ? "  (HIT SAFETY CAP)" : ""}`);
-
-
-// Step 3: outer product  s ⊗ Y  → flat m*n*T stack
-// In this step we take the single integration and broadcast it across the scalar array
-// Note that this is not valid for the bivalent analyte model.
-
-const stack = new Float32Array(s.length * T);
-for (let k = 0; k < s.length; k++){
-  const sk = s[k];
-  for (let t = 0; t < T; t++) stack[k*T + t] = sk * Y[t];
-}
 
 // ═══════════════════════════════════════════════════════════════
-// Step 4: noise + drift
+// Step 4a: common-mode drift vector (one value per frame, shared)
 // ═══════════════════════════════════════════════════════════════
-// This now incorporates its own seed for reproducible noise
+const D = 3.5 * Rmax, tau = 500;
+const sigmaOU = 0.02, thetaOU = 0.005, decayOU = true;
+const sigmaPixel = 0.10 * Rmax;
 
-// Hard-Coded Noise Parameters:
-const D          = 3.5 * Rmax;   // TOTAL accumulated drift
-const tau        = 500;          // settling time, s. Larger = more gradual.
-const sigmaOU    = 0.02;         // OU step size — the hard-to-subtract wander
-const thetaOU    = 0.005;        // OU mean-reversion rate (1/s). Small = long correlation
-const decayOU    = true;         // scale OU jitter by the same exp(-t/tau) envelope
-const sigmaPixel = 0.10 * Rmax;  // per-pixel noise: 5-30% of Rmax range
-
-const NOISE_SEED = 67890;        // As above, may use any integer in the given range.
 const rngNoise = mulberry32(NOISE_SEED);
-
-// Box-Muller transform
-function gauss(){
-  let u = 0, v = 0;
-  while (u === 0) u = rngNoise();
-  while (v === 0) v = rngNoise();
-  return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+function gaussFrom(rng){
+  let u=0,v=0;
+  while(u===0) u=rng();
+  while(v===0) v=rng();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
 }
 
-
-// drift vector: one value per frame, shared by all pixels
-const dtGrid = 2; // THIS SHOULD MATCH TIME RESOLUTION
 const driftCommon = new Float32Array(T);
-{ let w = 0;    // OU state — persists across t for temporal correlation
+{ let w = 0;
   for (let t = 0; t < T; t++){
-    const envelope = decayOU ? Math.exp(-t*dtGrid/tau) : 1;
-    // OU update: restoring pull toward 0, plus a random kick
-    w += -thetaOU*w*dtGrid + sigmaOU*envelope*Math.sqrt(dtGrid)*gauss();
-    driftCommon[t] = D*(1 - Math.exp(-t*dtGrid/tau)) + w;
+    const env = decayOU ? Math.exp(-t*dt/tau) : 1;
+    w += -thetaOU*w*dt + sigmaOU*env*Math.sqrt(dt)*gaussFrom(rngNoise);
+    driftCommon[t] = D*(1-Math.exp(-t*dt/tau)) + w;
   }
 }
 
-// --- apply drift + noise to the stack ---
-for (let k = 0; k < s.length; k++) {
-  const sk = s[k];
-  for (let t = 0; t < T; t++) {
-    stack[k*T + t] = sk * Y[t]              // signal
-    + driftCommon[t]          // SAME for every k — common-mode
-    + sigmaPixel * gauss();   // fresh draw for every (k,t) — i.i.d.
-  }
+// ═══════════════════════════════════════════════════════════════
+// Step 4b: per-pixel noise generated ON DEMAND, deterministically.
+//   Reseed a tiny PRNG from (k, t, NOISE_SEED) each draw so the same
+//   (k,t) always yields the same value — scrubbing is stable and no
+//   large array is held. This is the pattern the full-resolution
+//   export path will use. NOTE: this (k,t) hash is preview-grade;
+//   revisit for the deliverable where noise quality matters more.
+// ═══════════════════════════════════════════════════════════════
+function pixelNoise(k, t){
+  let h = (k * 2654435761) ^ (t * 40503) ^ NOISE_SEED;
+  const rng = mulberry32(h >>> 0);
+  return sigmaPixel * gaussFrom(rng);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Display
+// ═══════════════════════════════════════════════════════════════
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const off = document.createElement('canvas');
+off.width = n; off.height = m;          // canvas width = cols, height = rows
+const octx = off.getContext('2d');
+const img = octx.createImageData(n, m);
+
+const slider = document.getElementById('frame');
+slider.max = T-1;
+const readout = document.getElementById('readout');
+const scaleEl = document.getElementById('scale');
+const cbDrift = document.getElementById('showDrift');
+const cbNoise = document.getElementById('showNoise');
+
+function computeScale(){
+  let sMax = 0; for (let k=0;k<s.length;k++) if (s[k]>sMax) sMax=s[k];
+  let yMax = 0; for (let t=0;t<T;t++) if (Y[t]>yMax) yMax=Y[t];
+  let lo = 0, hi = sMax*yMax;
+  if (cbDrift.checked) hi += driftCommon[T-1];
+  if (cbNoise.checked){ lo -= 3*sigmaPixel; hi += 3*sigmaPixel; }
+  return [lo, hi];
+}
+
+function draw(){
+  const t = +slider.value;
+  const [lo, hi] = computeScale();
+  const span = hi - lo || 1;
+  const d = driftCommon[t];
+  const useDrift = cbDrift.checked, useNoise = cbNoise.checked;
+  for (let k = 0; k < m*n; k++){
+    let v = s[k]*Y[t];
+    if (useDrift) v += d;
+    if (useNoise) v += pixelNoise(k, t);
+    let g = Math.round(255*(v - lo)/span);
+    g = g<0?0:(g>255?255:g);
+    const p = k*4;
+    img.data[p] = g; img.data[p+1] = g; img.data[p+2] = g; img.data[p+3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(off, 0, 0, cv.width, cv.height);
+  readout.textContent = `t = ${grid[t]} s   |   frame ${t} / ${T-1}   |   R(t) = ${Y[t].toFixed(4)} RU   |   drift = ${d.toFixed(3)} RU`;
+  scaleEl.textContent = `grayscale: black = ${lo.toFixed(3)} RU, white = ${hi.toFixed(3)} RU   |   grid ${m}x${n}, T = ${T}, dt = ${dt}s   |   ${circles.length} circles, confluence ${achievedConfluence.toFixed(3)}, edgeFloor ${edgeFloor}`;
+}
+
+slider.addEventListener('input', draw);
+cbDrift.addEventListener('change', draw);
+cbNoise.addEventListener('change', draw);
+
+let playing = false, raf = null;
+const btn = document.getElementById('play');
+btn.addEventListener('click', ()=>{
+  playing = !playing;
+  btn.textContent = playing ? 'pause' : 'play';
+  if (playing) step(); else cancelAnimationFrame(raf);
+});
+function step(){
+  if (!playing) return;
+  let t = (+slider.value + 4) % T;    // 4 frames/tick (= 8 s at dt=2)
+  slider.value = t;
+  draw();
+  raf = requestAnimationFrame(step);
+}
+
+draw();

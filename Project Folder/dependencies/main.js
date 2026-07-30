@@ -20,6 +20,14 @@ let playing = false, raf = null;
 const btn = document.getElementById('play');
 btn.addEventListener('click', ()=>{
   playing = !playing;
-  btn.textContent = playing ? 'pause' : 'play';
+  btn.textContent = playing ? 'Pause' : 'play';
   if (playing) step(); else cancelAnimationFrame(raf);
 });
+
+function step(){
+  if (!playing) return;
+  let t = (+slider.value + 4) % T;
+  slider.value = t;
+  update();
+  raf = requestAnimationFrame(step);
+}
