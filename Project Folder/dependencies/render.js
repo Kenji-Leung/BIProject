@@ -211,7 +211,7 @@ function stepFrame() {
 }
 
 on("play", "click", () => {
-  const btn = $("play");
+  const btn = $("Play");
   playing = !playing;
   if (btn) btn.textContent = playing ? "Pause" : "Play";
   if (playing) stepFrame(); else cancelAnimationFrame(raf);

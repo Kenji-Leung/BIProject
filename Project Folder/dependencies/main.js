@@ -1,9 +1,5 @@
 'use strict';
 
-/* ── Shared state ────────────────────────────────────────────
-   Mutated (not reassigned) by whichever file produces data —
-   simulate() today, potentially a real-data loader later. Anyone
-   holding a reference to `state` always sees the latest values. */
 export const state = { parsed: null, lastData: null };
 
 /* ── DOM helpers ─────────────────────────────────────────── */
@@ -12,22 +8,14 @@ export const on = (id, evt, fn) => { const el = $(id); if (el) el.addEventListen
 
 export const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
 
+
 export const DATA_UPDATED_EVENT = 'data-updated';
 export const notifyDataUpdated = () => document.dispatchEvent(new CustomEvent(DATA_UPDATED_EVENT));
 export const onDataUpdated = fn => document.addEventListener(DATA_UPDATED_EVENT, fn);
 
-let playing = false, raf = null;
-const btn = document.getElementById('play');
-btn.addEventListener('click', ()=>{
-  playing = !playing;
-  btn.textContent = playing ? 'Pause' : 'play';
-  if (playing) step(); else cancelAnimationFrame(raf);
-});
 
-function step(){
-  if (!playing) return;
-  let t = (+slider.value + 4) % T;
-  slider.value = t;
-  update();
-  raf = requestAnimationFrame(step);
-}
+export const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
+export const REGION_X = IMG_W / 2, REGION_Y = IMG_H / 2, REGION_R = 140;
+
+/* ── Formatting ──────────────────────────────────────────── */
+export const fmtConc = Cnm => (Cnm >= 1 ? Cnm : Cnm.toPrecision(3)) + " nM";
