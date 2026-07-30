@@ -1,15 +1,11 @@
 'use strict';
 
-/* ── Helpers ─────────────────────────────────────────────── */
-const $      = id => document.getElementById(id);
-const on     = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
-export const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
+import { $, on, setStatus, state, notifyDataUpdated, onDataUpdated } from './main.js';
 
+/* ── Helpers ─────────────────────────────────────────────── */
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
 const vscale = (a, s) => a.map(v => v * s);
 const vsum   = a => a.reduce((x, y) => x + y, 0);
-export const state = { parsed: null, lastData: null };
-
 
 const gauss = () => {
   let u, v;
@@ -119,10 +115,6 @@ const MODEL_INPUT_IDS = [
   "kt", "Rmax", "Rmax2"
 ];
 
-/* ── State ───────────────────────────────────────────────── */
-let lastData = null;   // { grid }        — kept for timestamp helpers
-let parsed   = null;   // { region, ... } — everything the image needs
-
 function simulate() {
   const tA   = +$("tBase").value;
   const tD   = tA + +$("tAssoc").value;
@@ -165,12 +157,16 @@ function simulate() {
   const nSpots  = concs.length;
   const nFrames = grid.length;
 
-  state.parsed = { times: new Float64Array(grid), grid, nFrames, nSpots, concs,
-                  globalMin: gMin, globalMax: gMax, regions: [region] };
+  state.parsed   = { times: new Float64Array(grid), grid, nFrames, nSpots, concs,
+                      globalMin: gMin, globalMax: gMax, regions: [region] };
   state.lastData = { grid };
 
   setStatus(`${nFrames} pts × ${nSpots} conc · signal ${gMax > 0 ? "on" : "black (Rmax = 0)"}`);
-  updateStackImage();
+
+  // Was: updateStackImage() called directly. Firing an event instead means
+  // this file doesn't need to import/know about the preview-rendering code
+  // (or any future real-data loader that also calls notifyDataUpdated()).
+  notifyDataUpdated();
 }
 
 function setModelVisibility() {
@@ -196,6 +192,13 @@ function genDilution() {
   $("concSeries").value = pts.join(", ");
   simulate();
 }
+
+/* ══════════════════════════════════════════════════════════
+   STACK IMAGE — composites the region's disk into each frame
+   (Slated to move into its own preview.js — left here for now
+   while main.js is the first split.)
+   ══════════════════════════════════════════════════════════ */
+   //to be moved over to the render.js file
 
 export const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
 
@@ -348,9 +351,13 @@ on("noiseOn", "change", () => {
   simulate();
 });
 
-
 on("genDil", "click", genDilution);
 on("frame-slider", "input", function () { renderPreview(+this.value); });
+
+// Whenever state.parsed/state.lastData is (re)populated — by simulate()
+// here, or eventually by a real-data loader elsewhere — redraw the stack
+// image. No direct import needed between the producer and this listener.
+onDataUpdated(updateStackImage);
 
 /* ── Init ────────────────────────────────────────────────── */
 setModelVisibility();
