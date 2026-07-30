@@ -197,10 +197,6 @@ function genDilution() {
   simulate();
 }
 
-/* ══════════════════════════════════════════════════════════
-   STACK IMAGE — composites the region's disk into each frame
-   ══════════════════════════════════════════════════════════ */
-
 export const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
 
 /* Fixed placement for the single simulated region — previously set via

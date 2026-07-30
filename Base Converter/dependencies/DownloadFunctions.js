@@ -3,6 +3,8 @@ import {
   fmtConc, findPeakInjectionFrame, setStatus
 } from './math.js';
 
+const $ = id => document.getElementById(id);
+
 function u8ToBase64(u8) {
   const CHUNK = 0x8000;
   let binary = "";
@@ -75,9 +77,17 @@ function formatTimestamp(when = new Date()) {
 
 
 async function encodeTimeInput() {
-  const total = state.parsed.nFrames * state.parsed.nSpots;
-  const f32 = new Float32Array(total);
-  for (let g = 0; g < total; g++) f32[g] = g + 10;
+  const { nFrames, nSpots } = state.parsed;
+  const grid = state.lastData.grid;
+  const f32  = new Float32Array(nFrames * nSpots);
+
+  for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+    const timeOffset = stkTimeOffset(concIdx);   // same offset the .stk uses
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[concIdx * nFrames + timeIdx] = timeOffset + grid[timeIdx];
+    }
+  }
+
   const dataB64 = await encodeCompressedData(f32);
   return (
     `  <Input>\n` +
@@ -122,6 +132,15 @@ function stkFileName(concIdx) {
   return `spr_stack_${tag}.stk`;
 }
 
+/* Injection window read straight from the timing inputs (mirrors the
+   tA/tD calculation in simulate() and findPeakInjectionFrame()). Used
+   to place the .stk markers at the real association start/end. */
+function getInjectionWindow() {
+  const tA = +$("tBase").value;
+  const tD = tA + +$("tAssoc").value;
+  return { tA, tD };
+}
+
 function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const FRAME_TYPE_SPR_GRAY16 = 101;
   const nFrames       = state.parsed.nFrames;
@@ -134,7 +153,7 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const c        = state.parsed.concs[concIdx];
   const concStr  = (c != null) ? fmtConc(c) : `spot ${concIdx + 1}`;
   const labelStr = 'SPR simulation';
-  const descStr  = 'single-region simulation';
+  const descStr  = `model: ${$('model').value}`;
 
   const strBytes = s => enc.encode(s);
   const strSize  = s => 1 + strBytes(s).length;
@@ -142,7 +161,8 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
   const headerSize =
     4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
   const frameHeaderSize = 4 + 4 + 4 + 4;
-  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame);
+  const markersSize = 6 * 4;   // trailing marker block written below (2 records: int32+float32+int32 each)
+  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + markersSize;
 
   const buf  = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
@@ -185,6 +205,17 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
     writeInt32(IMG_H);
     for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
   }
+
+  // Markers at the real injection association window (start/end), rather
+  // than the reference build's hardcoded 30 / 120.
+  const { tA, tD } = getInjectionWindow();
+  writeInt32(1000);
+  writeFloat32(tA);
+  writeInt32(101);
+  writeInt32(1000);
+  writeFloat32(tD);
+  writeInt32(102);
+
   return buf;
 }
 
@@ -281,9 +312,9 @@ async function downloadAll() {
   const biXml  = await buildBiXml(startTime);
 
   const zip = new JSZip();
-  addStkFilesToFolder(zip.folder("DATA"), baseDate);
+  addStkFilesToFolder(zip.folder("Stacks"), baseDate);
   zip.folder("ROI").file("spr.roi", roiXml);
-  zip.folder("TIME").file("data.bi", biXml);
+  zip.folder("Data").file("data.bi", biXml);
 
   const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement("a"), {
@@ -299,7 +330,7 @@ async function downloadAll() {
 async function downloadSTK() {
   if (!state.parsed || !state.lastData) return;
   const zip = new JSZip();
-  addStkFilesToFolder(zip.folder("DATA"), formatTimestamp());
+  addStkFilesToFolder(zip.folder("Stack"), formatTimestamp());
   const blob = await zip.generateAsync({ type: "blob" });
   const a = Object.assign(document.createElement('a'), {
     href:     URL.createObjectURL(blob),

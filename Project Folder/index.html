@@ -5,7 +5,7 @@
         <link rel="stylesheet" href="./dependencies/style.css">
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
         <script type="module" src="./dependencies/download.js"></script>
-        <script type="module" src="./dependencies/main.js"></script>
+        <script type="module" src="./dependencies/math.js"></script>
     </head>
     <body>
       <div class="container">
@@ -15,11 +15,10 @@
             <div class="field">
               <label>Confluency <span class="unit"> Percentage (%)</span></label>
               <input type="number" id="Confluency" value="5" step="1">
-              <h1>
+              <h1></h1>
               <label>Seeding</label>
               <label>Input Seed</label>
               <input type="number" class="seed" id="inputSeed" >
-              <label>Current Seed:</label>
               <button class="pri" id="genSeed">Generate Random Seed</button>
             </div>
             <div class="check">
@@ -29,18 +28,18 @@
           </div>
 
           <div class="group">
-            <p class="group-title">Region Kinetics</p>
+            <p class="group-title">Cellular Kinetics</p>
             <div class="section">
               <div class="field">
-                <label>Region Types</label>
+                <label>Cell Types</label>
                 <input type="number" id="regionCount" min="1" value="3">
               </div>
               <div class="field">
-                <label>Region</label>
+                <label>Cell</label>
                 <select id="regionSelect"></select>
               </div>
               <div class="field">
-                <label>Frequency of Region Type</label>
+                <label>Frequency of Cell Type</label>
                 <input type="number" id="frequncy" value="10" min="10" max="100">
               </div>
               <div class="field">
