@@ -105,9 +105,7 @@ const MODEL_HINTS = {
   bivAnalyte: "The analyte may, at sufficient density, bind two membrane receptors simultaneously."
 };
 
-/* ── Inputs that drive the (single) simulated region ────────
-   Any change to one of these re-runs the simulation directly
-   from the live DOM values — no per-region storage/switching. */
+
 const MODEL_INPUT_IDS = [
   "model", "ka", "kd", "ka1", "kd1", "ka2", "kd2",
   "hetka1", "hetkd1", "hetka2", "hetkd2",
@@ -116,17 +114,20 @@ const MODEL_INPUT_IDS = [
 ];
 
 function simulate() {
-  const tA   = +$("tBase").value;
-  const tD   = tA + +$("tAssoc").value;
-  const tEnd = tD + +$("tDissoc").value;
-  const grid = Array.from({ length: Math.round(tEnd) + 1 }, (_, i) => i);
+  const tBase   = +$("tBase").value;
+  const tAssoc  = +$("tAssoc").value;
+  const tDissoc = +$("tDissoc").value;
+  const cyc     = tAssoc + tDissoc;   // one injection's association + dissociation
 
   const noiseOn = $("noiseOn").checked;
   const noiseSd = +$("noiseSd").value || 0;
   const drift   = +$("drift").value   || 0;
 
-  // Analyte concentrations, ascending -> the stack runs lowest to highest.
-  const concs = parseConcs($("concSeries").value).sort((a, b) => a - b);
+  const concs  = parseConcs($("concSeries").value);
+  const nSpots = concs.length;
+  const total  = tBase + nSpots * cyc;   // full serial timeline
+
+  const grid = Array.from({ length: Math.round(total) + 1 }, (_, i) => i);
 
   const model = $("model").value;
   const Rmax  = +$("Rmax").value || 0;
@@ -134,17 +135,27 @@ function simulate() {
   const base   = makeDeriv(model, Rmax);
   const engine = ($("mtlOn") && $("mtlOn").checked) ? withTransport(base, +$("kt").value || 0) : base;
 
-  const traces = concs.map(Cnm => {
-    const C    = Cnm * 1e-9;
-    const Cfun = t => (t >= tA && t < tD) ? C : 0;
-    let y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
-    if (noiseOn) y = y.map((v, k) => v + noiseSd * gauss() + drift * (grid[k] / tEnd));
-    return y;                       // one time-series per concentration
+
+  const concsM = concs.map(Cnm => Cnm * 1e-9);
+  const Cfun = t => {
+    if (t < tBase) return 0;
+    let k = Math.floor((t - tBase) / cyc);
+    if (k >= nSpots) k = nSpots - 1;
+    const inCyc = (t - tBase) - k * cyc;
+    return inCyc < tAssoc ? concsM[k] : 0;
+  };
+
+  let Y = simRK4(grid, engine.deriv, new Array(engine.size).fill(0), Cfun);
+  if (noiseOn) Y = Y.map((v, i) => v + noiseSd * gauss() + drift * (grid[i] / total));
+
+
+  const nFrames = Math.round(cyc) + 1;
+  const traces = concs.map((_, k) => {
+    const startIdx = Math.round(tBase + k * cyc);
+    return Y.slice(startIdx, startIdx + nFrames);
   });
 
-  // Single fixed region — placement used to be user-configurable
-  // (region select + coordinate/radius UI); now a constant so the
-  // stack-image compositing and export format stay unchanged.
+
   const region = { idx: 1, x: REGION_X, y: REGION_Y, r: REGION_R, traces };
 
   let gMin = Infinity, gMax = -Infinity;
@@ -154,18 +165,14 @@ function simulate() {
   }));
   if (!isFinite(gMin)) { gMin = 0; gMax = 0; }
 
-  const nSpots  = concs.length;
-  const nFrames = grid.length;
+  const localGrid = Array.from({ length: nFrames }, (_, i) => i);
 
-  state.parsed   = { times: new Float64Array(grid), grid, nFrames, nSpots, concs,
+  state.parsed   = { times: new Float64Array(localGrid), grid: localGrid, nFrames, nSpots, concs,
                       globalMin: gMin, globalMax: gMax, regions: [region] };
-  state.lastData = { grid };
+  state.lastData = { grid: localGrid };
 
-  setStatus(`${nFrames} pts × ${nSpots} conc · signal ${gMax > 0 ? "on" : "black (Rmax = 0)"}`);
+  setStatus(`${nFrames} pts × ${nSpots} conc · serial, no regen · signal ${gMax > 0 ? "on" : "black (Rmax = 0)"}`);
 
-  // Was: updateStackImage() called directly. Firing an event instead means
-  // this file doesn't need to import/know about the preview-rendering code
-  // (or any future real-data loader that also calls notifyDataUpdated()).
   notifyDataUpdated();
 }
 
@@ -198,7 +205,6 @@ function genDilution() {
    (Slated to move into its own preview.js — left here for now
    while main.js is the first split.)
    ══════════════════════════════════════════════════════════ */
-   //to be moved over to the render.js file
 
 export const IMG_W = 480, IMG_H = 640, MAX16 = 65535;
 
@@ -300,8 +306,10 @@ function renderPreview(globalFrame) {
 }
 
 export function findPeakInjectionFrame() {
-  const tA = +$("tBase").value;
-  const tD = tA + +$("tAssoc").value;
+  // Per-concentration local axis now starts at each injection's own
+  // association onset (t=0), not a shared baseline — see simulate().
+  const tA = 0;
+  const tD = +$("tAssoc").value;
   const { regions, nFrames, nSpots, times } = state.parsed;
 
   let bestFrame = 0, bestRU = -Infinity;

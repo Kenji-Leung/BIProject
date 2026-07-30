@@ -135,8 +135,10 @@ function stkFileName(concIdx) {
    tA/tD calculation in simulate() and findPeakInjectionFrame()). Used
    to place the .stk markers at the real association start/end. */
 function getInjectionWindow() {
-  const tA = +$("tBase").value;
-  const tD = tA + +$("tAssoc").value;
+  // Per-concentration local axis starts at each injection's own association
+  // onset (t=0), not a shared baseline — see simulate() in kinetics.js.
+  const tA = 0;
+  const tD = +$("tAssoc").value;
   return { tA, tD };
 }
 
