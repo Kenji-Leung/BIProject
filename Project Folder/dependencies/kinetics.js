@@ -113,7 +113,7 @@ const MODEL_INPUT_IDS = [
   "kt", "Rmax", "Rmax2"
 ];
 
-function simulate() {
+export function simulate() {
   const tBase   = +$("tBase").value;
   const tAssoc  = +$("tAssoc").value;
   const tDissoc = +$("tDissoc").value;
@@ -153,7 +153,6 @@ function simulate() {
     return Y.slice(startIdx, startIdx + nFrames);
   });
 
-
   const region = { idx: 1, x: REGION_X, y: REGION_Y, r: REGION_R, traces };
 
   let gMin = Infinity, gMax = -Infinity;
@@ -162,7 +161,6 @@ function simulate() {
     if (v > gMax) gMax = v;
   }));
   if (!isFinite(gMin)) { gMin = 0; gMax = 0; }
-
 
   const localGrid = Array.from({ length: nFrames }, (_, i) => i);
 
@@ -235,6 +233,5 @@ on("noiseOn", "change", () => {
 
 on("genDil", "click", genDilution);
 
-/* ── Init ────────────────────────────────────────────────── */
+
 setModelVisibility();
-simulate();

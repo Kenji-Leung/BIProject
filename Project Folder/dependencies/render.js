@@ -1,6 +1,9 @@
 'use strict';
 
-import {$, on, state, onDataUpdated, fmtConc, IMG_W, IMG_H, MAX16} from './main.js';
+import {
+  $, on, state, onDataUpdated, fmtConc, IMG_W, IMG_H, MAX16
+} from './main.js';
+import { simulate } from './kinetics.js';
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -67,6 +70,11 @@ export function generateCapacityField({
 
   return { s, binField, circles, achievedConfluence: coveredCount / (m * n) };
 }
+
+/* ══════════════════════════════════════════════════════════
+   STACK IMAGE — composites the region's disk into each frame.
+   Moved from kinetics.js. Reads state.parsed; never writes it.
+   ══════════════════════════════════════════════════════════ */
 
 function updateStackImage() {
   const results = $("results");
@@ -182,6 +190,10 @@ export function findPeakInjectionFrame() {
   return { frame: bestFrame, ru: bestRU };
 }
 
+/* ══════════════════════════════════════════════════════════
+   EVENT LISTENERS — frame scrubbing + play/pause
+   ══════════════════════════════════════════════════════════ */
+
 on("frame-slider", "input", function () { renderPreview(+this.value); });
 
 let playing = false, raf = null;
@@ -205,8 +217,6 @@ on("play", "click", () => {
   if (playing) stepFrame(); else cancelAnimationFrame(raf);
 });
 
-// Whenever state.parsed/state.lastData is (re)populated — by simulate()
-// in kinetics.js, or eventually by a real-data loader elsewhere — redraw
-// the stack image. No direct import needed between the producer and this
-// listener.
 onDataUpdated(updateStackImage);
+
+simulate();
