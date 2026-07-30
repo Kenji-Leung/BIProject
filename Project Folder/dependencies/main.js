@@ -12,12 +12,14 @@ export const on = (id, evt, fn) => { const el = $(id); if (el) el.addEventListen
 
 export const setStatus = msg => { const el = $("status"); if (el) el.textContent = msg; };
 
-/* ── Cross-file notification ─────────────────────────────────
-   Fired whenever state.parsed / state.lastData has been (re)populated.
-   Consumers (frame preview, export) subscribe via onDataUpdated()
-   instead of the producer calling them directly — avoids a circular
-   import between the file that computes data and the file(s) that
-   react to it. */
 export const DATA_UPDATED_EVENT = 'data-updated';
 export const notifyDataUpdated = () => document.dispatchEvent(new CustomEvent(DATA_UPDATED_EVENT));
 export const onDataUpdated = fn => document.addEventListener(DATA_UPDATED_EVENT, fn);
+
+let playing = false, raf = null;
+const btn = document.getElementById('play');
+btn.addEventListener('click', ()=>{
+  playing = !playing;
+  btn.textContent = playing ? 'pause' : 'play';
+  if (playing) step(); else cancelAnimationFrame(raf);
+});
