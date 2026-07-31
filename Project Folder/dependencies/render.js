@@ -179,10 +179,17 @@ function regionBrightness16(rg, concIdx, timeIdx) {
 export function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
   if (!state.parsed || !state.parsed.regions) return mat;
+  const field = state.capacityField;
+  if (!field) return mat;
+  const { s } = field;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
   for (const rg of state.parsed.regions) {
     const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    stampCapacityField(mat, rg, b16);
+    for (let k = 0; k < mat.length; k++) {
+      let v = Math.round(s[k] * b16);
+      if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
+      mat[k] = v;
+    }
   }
   return mat;
 }
