@@ -5,7 +5,7 @@ import {
 } from './main.js';
 import { simulate } from './kinetics.js';
 
-export function mulberry32(seed) {
+function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -15,30 +15,37 @@ export function mulberry32(seed) {
   };
 }
 
-export function generateCapacityField({
+function generateCapacityField({
   m, n,
   capacityBins,
   targetConfluence,
   rMin, rMax,
   maxCircles = 5000,
-  edgeFloor = 0.15,
   seed
 }) {
   const rng = mulberry32(seed);
+  const noOverlap = !allowOverlap();   // read once per call — see allowOverlap() below
 
   const covered = new Uint8Array(m * n);
   let coveredCount = 0;
 
   const s = new Float32Array(m * n);
-  const binField = new Int8Array(m * n).fill(-1);
   const circles = [];
 
+  const MAX_OVERLAP_RETRIES = 30;
+
   function placeOneCircle() {
-    const ci = rng() * m;
-    const cj = rng() * n;
-    const r  = rMin + rng() * (rMax - rMin);
-    const cap = capacityBins[(rng() * capacityBins.length) | 0];
-    const binIdx = capacityBins.indexOf(cap);
+    let ci, cj, r, cap, tries = 0;
+    do {
+      ci = rng() * m;
+      cj = rng() * n;
+      r  = rMin + rng() * (rMax - rMin);
+      cap = capacityBins[(rng() * capacityBins.length) | 0];
+      tries++;
+    } while (noOverlap && circleOverlapsAny(ci, cj, r, circles) && tries < MAX_OVERLAP_RETRIES);
+
+    if (noOverlap && circleOverlapsAny(ci, cj, r, circles)) return;   // couldn't fit one — skip
+
     const r2 = r * r;
     const iLo = Math.max(0, Math.floor(ci - r)), iHi = Math.min(m - 1, Math.ceil(ci + r));
     const jLo = Math.max(0, Math.floor(cj - r)), jHi = Math.min(n - 1, Math.ceil(cj + r));
@@ -49,17 +56,11 @@ export function generateCapacityField({
         if (d2 <= r2) {
           const k = i * n + j;
           if (covered[k] === 0) { covered[k] = 1; coveredCount++; }
-          // edge profile: floor at center (d=0) rising to 1.0 at rim (d=r)
-          const profile = edgeFloor + (1 - edgeFloor) * (d2 / r2);
-          const weighted = cap * profile;      // this cell's contribution here
-          if (weighted > s[k]) {                // MAX composition on the WEIGHTED value
-            s[k] = weighted;
-            binField[k] = binIdx;               // winning cell sets the bin too
-          }
+          if (cap > s[k]) s[k] = cap;   // MAX composition, flat value within the disk
         }
       }
     }
-    circles.push({ ci, cj, r, capacity: cap, binIdx });
+    circles.push({ ci, cj, r, capacity: cap });
   }
 
   let iter = 0;
@@ -68,13 +69,75 @@ export function generateCapacityField({
     iter++;
   }
 
-  return { s, binField, circles, achievedConfluence: coveredCount / (m * n) };
+  return { s, circles, achievedConfluence: coveredCount / (m * n) };
 }
 
-/* ══════════════════════════════════════════════════════════
-   STACK IMAGE — composites the region's disk into each frame.
-   Moved from kinetics.js. Reads state.parsed; never writes it.
-   ══════════════════════════════════════════════════════════ */
+function circleOverlapsAny(ci, cj, r, circles) {
+  for (const c of circles) {
+    const dx = ci - c.ci, dy = cj - c.cj;
+    const minDist = r + c.r;
+    if (dx * dx + dy * dy < minDist * minDist) return true;
+  }
+  return false;
+}
+
+function allowOverlap() {
+  const el = $("overlap");
+  return el ? el.checked : true;
+}
+
+on("overlap", "change", () => refreshCapacityFieldIfNeeded());
+
+function getSeed() {
+  const el = $("inputSeed");
+  const v = el ? +el.value : NaN;
+  return Number.isFinite(v) ? v : 0;
+}
+
+on("genSeed", "click", () => {
+  const el = $("inputSeed");
+  if (el) el.value = Math.floor(Math.random() * 2 ** 32);
+  refreshCapacityFieldIfNeeded();
+});
+
+on("inputSeed", "input", refreshCapacityFieldIfNeeded);
+
+const CAPACITY_BINS = [0.4, 0.6, 0.8, 1.0];
+const CIRCLE_R_MIN = 15, CIRCLE_R_MAX = 25;
+
+let lastFieldSeed, lastFieldConfluence, lastFieldOverlap;
+
+function getTargetConfluence() {
+  const el = $("Confluency");
+  const pct = el ? +el.value : NaN;
+  return (Number.isFinite(pct) ? pct : 0) / 100;
+}
+
+function refreshCapacityFieldIfNeeded() {
+  const seed = getSeed();
+  const targetConfluence = getTargetConfluence();
+  const overlap = allowOverlap();
+
+  const unchanged = state.capacityField
+    && seed === lastFieldSeed
+    && targetConfluence === lastFieldConfluence
+    && overlap === lastFieldOverlap;
+  if (unchanged) return;
+
+  state.capacityField = generateCapacityField({
+    m: IMG_H, n: IMG_W,
+    capacityBins: CAPACITY_BINS,
+    targetConfluence,
+    rMin: CIRCLE_R_MIN, rMax: CIRCLE_R_MAX,
+    seed
+  });
+
+  lastFieldSeed = seed;
+  lastFieldConfluence = targetConfluence;
+  lastFieldOverlap = overlap;
+}
+
+on("Confluency", "input", refreshCapacityFieldIfNeeded);
 
 function updateStackImage() {
   const results = $("results");
@@ -104,7 +167,6 @@ export function decodeFrame(globalFrame) {
   };
 }
 
-/* Brightness (0..MAX16) for one region at one (concIdx, timeIdx). */
 function regionBrightness16(rg, concIdx, timeIdx) {
   if (concIdx >= rg.traces.length) return 0;
   const { globalMin, globalMax } = state.parsed;
@@ -114,7 +176,6 @@ function regionBrightness16(rg, concIdx, timeIdx) {
   return Math.round(norm * MAX16);
 }
 
-/* Stamp a filled disk of value `val` centred at (cx, cy) with radius r. */
 function stampDisk(mat, cx, cy, r, val) {
   if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
   const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
@@ -128,19 +189,39 @@ function stampDisk(mat, cx, cy, r, val) {
   }
 }
 
-/* Full IMG_H × IMG_W Uint16 frame: black background + the region's disk. */
+function stampCapacityField(mat, rg, b16) {
+  const field = state.capacityField;
+  if (!field) return;
+  const { s } = field;
+  const cx = rg.x, cy = rg.y, r = rg.r;
+  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
+  const r2 = r * r;
+  for (let py = y0; py <= y1; py++) {
+    for (let px = x0; px <= x1; px++) {
+      const dx = px - cx, dy = py - cy;
+      if (dx * dx + dy * dy <= r2) {
+        const k = py * IMG_W + px;
+        let v = Math.round(s[k] * b16);
+        if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
+        mat[k] = v;
+      }
+    }
+  }
+}
+
 export function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
   if (!state.parsed || !state.parsed.regions) return mat;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
   for (const rg of state.parsed.regions) {
     const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    stampDisk(mat, rg.x, rg.y, rg.r, b16);       // disk sits on top of the noise
+    stampCapacityField(mat, rg, b16);
   }
   return mat;
 }
 
-/* Preview is built from the SAME matrix as the exported .stk frame. */
 function renderPreview(globalFrame) {
   if (!state.parsed || !state.parsed.regions) return;
   const canvas = $("img-canvas");
@@ -211,12 +292,12 @@ function stepFrame() {
 }
 
 on("play", "click", () => {
-  const btn = $("Play");
+  const btn = $("play");
   playing = !playing;
   if (btn) btn.textContent = playing ? "Pause" : "Play";
   if (playing) stepFrame(); else cancelAnimationFrame(raf);
 });
 
 onDataUpdated(updateStackImage);
-
 simulate();
+refreshCapacityFieldIfNeeded();
