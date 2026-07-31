@@ -176,41 +176,6 @@ function regionBrightness16(rg, concIdx, timeIdx) {
   return Math.round(norm * MAX16);
 }
 
-function stampDisk(mat, cx, cy, r, val) {
-  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
-  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
-  const r2 = r * r;
-  for (let py = y0; py <= y1; py++) {
-    for (let px = x0; px <= x1; px++) {
-      const dx = px - cx, dy = py - cy;
-      if (dx * dx + dy * dy <= r2) mat[py * IMG_W + px] = val;
-    }
-  }
-}
-
-function stampCapacityField(mat, rg, b16) {
-  const field = state.capacityField;
-  if (!field) return;
-  const { s } = field;
-  const cx = rg.x, cy = rg.y, r = rg.r;
-  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
-  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
-  const r2 = r * r;
-  for (let py = y0; py <= y1; py++) {
-    for (let px = x0; px <= x1; px++) {
-      const dx = px - cx, dy = py - cy;
-      if (dx * dx + dy * dy <= r2) {
-        const k = py * IMG_W + px;
-        let v = Math.round(s[k] * b16);
-        if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
-        mat[k] = v;
-      }
-    }
-  }
-}
-
 export function getMatrix16(globalFrame) {
   const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
   if (!state.parsed || !state.parsed.regions) return mat;
