@@ -128,15 +128,19 @@ function stkFileName(concIdx) {
   return `spr_stack_${tag}.stk`;
 }
 
-/* Injection window read straight from the timing inputs (mirrors the
-   tA/tD calculation in simulate() and findPeakInjectionFrame()). Used
-   to place the .stk markers at the real association start/end. */
-function getInjectionWindow() {
-  // Per-concentration local axis starts at each injection's own association
-  // onset (t=0), not a shared baseline — see simulate() in kinetics.js.
-  const tA = 0;
-  const tD = +$("tAssoc").value;
-  return { tA, tD };
+/* Injection window read straight from the timing inputs: tB is the
+   "baseline(s)" field (#tBase), tD is the "assoc.(s)" field (#tAssoc) —
+   each offset by concIdx * "dissoc.(s)" (#tDissoc), so later concentrations
+   in the serial run get pushed forward by one dissociation length per step.
+   Used to place the .stk markers. */
+function getInjectionWindow(concIdx = 0) {
+  const tBase   = +$("tBase").value;
+  const tAssoc  = +$("tAssoc").value;
+  const tDissoc = +$("tDissoc").value;
+  const offset  = concIdx * tDissoc;
+  const tB = tBase + offset;
+  const tD = tAssoc + offset;
+  return { tB, tD };
 }
 
 function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
@@ -204,11 +208,11 @@ function buildStkBuffer(baseDate = new Date(), concIdx = 0) {
     for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
   }
 
-  // Markers at the real injection association window (start/end), rather
-  // than the reference build's hardcoded 30 / 120.
-  const { tA, tD } = getInjectionWindow();
+  // Markers: tB from the "baseline(s)" input, tD from the "assoc.(s)" input,
+  // both offset by concIdx * "dissoc.(s)".
+  const { tB, tD } = getInjectionWindow(concIdx);
   writeInt32(1000);
-  writeFloat32(tA);
+  writeFloat32(tB);
   writeInt32(101);
   writeInt32(1000);
   writeFloat32(tD);
