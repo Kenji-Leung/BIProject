@@ -130,14 +130,16 @@ function stkFileName(concIdx) {
 
 /* Injection window read straight from the timing inputs: tB is the
    "baseline(s)" field (#tBase), tD is the "assoc.(s)" field (#tAssoc) —
-   each offset by concIdx * "dissoc.(s)" (#tDissoc), so later concentrations
-   in the serial run get pushed forward by one dissociation length per step.
-   Used to place the .stk markers. */
+   each offset by stkTimeOffset(concIdx), the SAME offset already baked
+   into every frame's own timestamp in this file (see buildStkBuffer).
+   Using the same offset here means whatever reads the file and subtracts
+   that offset back out recovers tBase/tAssoc correctly for every
+   concentration, not just the first (concIdx=0, offset=0). Used to place
+   the .stk markers. */
 function getInjectionWindow(concIdx = 0) {
-  const tBase   = +$("tBase").value;
-  const tAssoc  = +$("tAssoc").value;
-  const tDissoc = +$("tDissoc").value;
-  const offset  = concIdx * tDissoc;
+  const tBase  = +$("tBase").value;
+  const tAssoc = +$("tAssoc").value;
+  const offset = stkTimeOffset(concIdx);
   const tB = tBase + offset;
   const tD = tAssoc + offset;
   return { tB, tD };
