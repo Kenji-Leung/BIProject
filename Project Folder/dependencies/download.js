@@ -295,9 +295,7 @@ async function buildRoiXml(timestamp = formatTimestamp()) {
 
 async function buildBiXml(timestamp = formatTimestamp()) {
   const timeBlock  = await encodeTimeInput();
-  // TEMPORARILY DISABLED — same as buildRoiXml's roiEntries. Re-enable by
-  // restoring: const roiEntries = await encodeResponseInput();
-  const roiEntries = "";
+  const roiEntries = await encodeResponseInput();
 
   return `<?xml version="1.0" encoding="utf-8"?>
           <SPRm-Realtime>
