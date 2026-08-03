@@ -239,27 +239,29 @@ async function buildRoiXml(timestamp = formatTimestamp()) {
   const bfCompressed = await deflateRawCompress(bfBuf);
   const bfB64 = u8ToBase64(bfCompressed);
 
-  const regions = state.parsed.regions;
+  // TEMPORARILY DISABLED — roiEntries left empty so the .roi file has no
+  // <Roi> polygons. Re-enable by uncommenting this block.
   let roiEntries = "";
-  regions.forEach(rg => {
-    let x0, y0, x1, y1;
-    if (isFinite(rg.x) && isFinite(rg.y) && isFinite(rg.r) && rg.r > 0) {
-      x0 = Math.max(0, Math.round(rg.x - rg.r));
-      y0 = Math.max(0, Math.round(rg.y - rg.r));
-      x1 = Math.min(sprGrayW, Math.round(rg.x + rg.r));
-      y1 = Math.min(sprGrayH, Math.round(rg.y + rg.r));
-    } else {
-      const w = Math.round(sprGrayW / 2), h = Math.round(sprGrayH / 2);
-      x0 = Math.round((sprGrayW - w) / 2); y0 = Math.round((sprGrayH - h) / 2);
-      x1 = x0 + w; y1 = y0 + h;
-    }
-    const poly = `${x0} ${y0} ${x0} ${y1} ${x1} ${y1} ${x1} ${y0}`;
-    roiEntries +=
-      `  <Roi>\n` +
-      `    <Polygon>${poly}</Polygon>\n` +
-      `    <Sensitivity>1</Sensitivity>\n` +
-      `  </Roi>\n`;
-  });
+  // const regions = state.parsed.regions;
+  // regions.forEach(rg => {
+  //   let x0, y0, x1, y1;
+  //   if (isFinite(rg.x) && isFinite(rg.y) && isFinite(rg.r) && rg.r > 0) {
+  //     x0 = Math.max(0, Math.round(rg.x - rg.r));
+  //     y0 = Math.max(0, Math.round(rg.y - rg.r));
+  //     x1 = Math.min(sprGrayW, Math.round(rg.x + rg.r));
+  //     y1 = Math.min(sprGrayH, Math.round(rg.y + rg.r));
+  //   } else {
+  //     const w = Math.round(sprGrayW / 2), h = Math.round(sprGrayH / 2);
+  //     x0 = Math.round((sprGrayW - w) / 2); y0 = Math.round((sprGrayH - h) / 2);
+  //     x1 = x0 + w; y1 = y0 + h;
+  //   }
+  //   const poly = `${x0} ${y0} ${x0} ${y1} ${x1} ${y1} ${x1} ${y0}`;
+  //   roiEntries +=
+  //     `  <Roi>\n` +
+  //     `    <Polygon>${poly}</Polygon>\n` +
+  //     `    <Sensitivity>1</Sensitivity>\n` +
+  //     `  </Roi>\n`;
+  // });
 
   const winW = Math.round(sprGrayW / 2), winH = Math.round(sprGrayH / 2);
   const winX0 = Math.round((sprGrayW - winW) / 2), winY0 = Math.round((sprGrayH - winH) / 2);
@@ -287,7 +289,9 @@ async function buildRoiXml(timestamp = formatTimestamp()) {
 
 async function buildBiXml(timestamp = formatTimestamp()) {
   const timeBlock  = await encodeTimeInput();
-  const roiEntries = await encodeResponseInput();
+  // TEMPORARILY DISABLED — same as buildRoiXml's roiEntries. Re-enable by
+  // restoring: const roiEntries = await encodeResponseInput();
+  const roiEntries = "";
 
   return `<?xml version="1.0" encoding="utf-8"?>
           <SPRm-Realtime>

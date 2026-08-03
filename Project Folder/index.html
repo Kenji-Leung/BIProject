@@ -17,7 +17,7 @@
             <p class="group-title">Model generation</p>
             <div class="field">
               <label>Confluency <span class="unit"> Percentage (%)</span></label>
-              <input type="number" id="Confluency" value="5" step="1" max="100">
+              <input type="number" id="Confluency" value="10" step="1" max="100" min="1">
               <h1></h1>
               <label>Seeding</label>
               <label>Input Seed</label>
@@ -207,7 +207,6 @@
         <aside class="sidebar">
             <h1>SPR Stack Preview</h1>
             <div id="status" class="status"></div>
-              <div class="label">Frame preview</div>
               <div class="row">
                 <button class="pri" id="play">Play</button>
                 <input type="range" id="frame-slider" min="0" max="0" value="0" step="1">
@@ -218,7 +217,6 @@
                 <div class="card">
                   <div id="conc-tag"></div>
                   <canvas id="img-canvas" width="480" height="640"></canvas>
-                  <div class="img-label">480×640</div>
                 </div>
                 <div class="card">
                     <div class="label">Export</div>
