@@ -80,12 +80,13 @@ function formatTimestamp(when = new Date()) {
 async function encodeTimeInput() {
   const { nFrames, nSpots } = state.parsed;
   const grid = state.lastData.grid;
-  const f32  = new Float32Array(nFrames * nSpots);
+  const nTotal = nSpots + 2;
+  const f32  = new Float32Array(nFrames * nTotal);
 
-  for (let concIdx = 0; concIdx < nSpots; concIdx++) {
-    const timeOffset = stkTimeOffset(concIdx);
+  for (let seqIndex = 0; seqIndex < nTotal; seqIndex++) {
+    const timeOffset = stkTimeOffset(seqIndex);
     for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
-      f32[concIdx * nFrames + timeIdx] = timeOffset + grid[timeIdx];
+      f32[seqIndex * nFrames + timeIdx] = timeOffset + grid[timeIdx];
     }
   }
 
@@ -100,15 +101,30 @@ async function encodeTimeInput() {
 
 async function encodeResponseInput() {
   const { regions, nFrames, nSpots } = state.parsed;
+  const tAssoc = +$("tAssoc").value;
+  const nTotal = nSpots + 2;
+
+  const calibTrace = stepResponseTrace(nFrames, tAssoc, CALIBRATION_RMAX, CALIBRATION_KD);
+  const blankTrace  = stepResponseTrace(nFrames, tAssoc, BLANK_RMAX, BLANK_KD);
+
   const parts = [];
   for (const rg of regions) {
-    const f32 = new Float32Array(nFrames * nSpots);
+    const f32 = new Float32Array(nFrames * nTotal);
+
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[0 * nFrames + timeIdx] = calibTrace[timeIdx] / 240;
+    }
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[1 * nFrames + timeIdx] = blankTrace[timeIdx] / 240;
+    }
     for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+      const seqIndex = concIdx + 2;
       for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
         const ru = concIdx < rg.traces.length ? rg.traces[concIdx][timeIdx] : 0;
-        f32[concIdx * nFrames + timeIdx] = ru / 240;
+        f32[seqIndex * nFrames + timeIdx] = ru / 240;
       }
     }
+
     const dataB64 = await encodeCompressedData(f32);
     parts.push(
       `  <Input>\n` +
