@@ -122,9 +122,8 @@ async function encodeResponseInput() {
 
 function stkTimeOffset(concIdx) {
   const g = state.lastData.grid, n = state.parsed.nFrames;
-  const step = n > 1 ? (g[1] - g[0]) : 1;
   const span = g[n - 1] - g[0];
-  return concIdx * (span + step);
+  return concIdx * span;
 }
 
 function stkFileName(concIdx) {
