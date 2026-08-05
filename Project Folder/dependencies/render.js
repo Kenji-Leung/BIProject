@@ -1,293 +1,440 @@
-'use strict';
+import { state, setStatus, $, fmtConc, IMG_W, IMG_H, MAX16 } from './main.js';
+import { getMatrix16, decodeFrame, findPeakInjectionFrame, getMatrix16ForBrightness } from './render.js';
 
-import {
-  $, on, state, onDataUpdated, fmtConc, IMG_W, IMG_H, MAX16
-} from './main.js';
-import { simulate } from './kinetics.js';
+const CALIBRATION_RMAX = -0.575;
+const CALIBRATION_KD   = 1;
+const BLANK_RMAX = 0;
+const BLANK_KD   = 0;
 
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+function u8ToBase64(u8) {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
-function generateCapacityField({
-  m, n,
-  capacityBins,
-  targetConfluence,
-  rMin, rMax,
-  maxCircles = 5000,
-  seed
-}) {
-  const rng = mulberry32(seed);
-  const noOverlap = !allowOverlap();
+async function deflateRawCompress(u8) {
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(u8);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
 
-  const covered = new Uint8Array(m * n);
-  let coveredCount = 0;
+async function deflateRawDecompress(u8) {
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(u8);
+  writer.close();
+  const chunks = [];
+  const reader = ds.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
 
-  const s = new Float32Array(m * n);
-  const circles = [];
+async function encodeCompressedData(typedArrayOrBuffer) {
+  const u8 = typedArrayOrBuffer instanceof ArrayBuffer
+      ? new Uint8Array(typedArrayOrBuffer)
+      : new Uint8Array(typedArrayOrBuffer.buffer, typedArrayOrBuffer.byteOffset, typedArrayOrBuffer.byteLength);
+  const compressed = await deflateRawCompress(u8);
+  return u8ToBase64(compressed);
+}
 
-  const MAX_OVERLAP_RETRIES = 30;
+async function decodeCompressedData(base64Str) {
+  const binary = atob(base64Str);
+  const compressed = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) compressed[i] = binary.charCodeAt(i);
+  return deflateRawDecompress(compressed);
+}
 
-  function placeOneCircle() {
-    let ci, cj, r, cap, tries = 0;
-    do {
-      ci = rng() * m;
-      cj = rng() * n;
-      r  = rMin + rng() * (rMax - rMin);
-      cap = capacityBins[(rng() * capacityBins.length) | 0];
-      tries++;
-    } while (noOverlap && circleOverlapsAny(ci, cj, r, circles) && tries < MAX_OVERLAP_RETRIES);
 
-    if (noOverlap && circleOverlapsAny(ci, cj, r, circles)) return;
 
-    const r2 = r * r;
-    const iLo = Math.max(0, Math.floor(ci - r)), iHi = Math.min(m - 1, Math.ceil(ci + r));
-    const jLo = Math.max(0, Math.floor(cj - r)), jHi = Math.min(n - 1, Math.ceil(cj + r));
-    for (let i = iLo; i <= iHi; i++) {
-      for (let j = jLo; j <= jHi; j++) {
-        const di = i - ci, dj = j - cj;
-        const d2 = di * di + dj * dj;
-        if (d2 <= r2) {
-          const k = i * n + j;
-          if (covered[k] === 0) { covered[k] = 1; coveredCount++; }
-          if (cap > s[k]) s[k] = cap;
-        }
+function formatTimestamp(when = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(when.getMonth()+1)}/${pad(when.getDate())}/${when.getFullYear()} ` +
+         `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+}
+
+
+async function encodeTimeInput() {
+  const { nFrames, nSpots } = state.parsed;
+  const grid = state.lastData.grid;
+  const nTotal = nSpots + 2;
+  const f32  = new Float32Array(nFrames * nTotal);
+
+  for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+    f32[0 * nFrames + timeIdx] = grid[timeIdx];
+    f32[1 * nFrames + timeIdx] = grid[timeIdx];
+  }
+
+  for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+    const seqIndex = concIdx + 2;
+    const timeOffset = stkTimeOffset(concIdx);
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[seqIndex * nFrames + timeIdx] = timeOffset + grid[timeIdx];
+    }
+  }
+
+  const dataB64 = await encodeCompressedData(f32);
+  return (
+    `  <Input>\n` +
+    `    <Name>Time</Name>\n` +
+    `    <Data>${dataB64}</Data>\n` +
+    `  </Input>`
+  );
+}
+
+async function encodeResponseInput() {
+  const { regions, nFrames, nSpots } = state.parsed;
+  const tAssoc = +$("tAssoc").value;
+  const nTotal = nSpots + 2;
+
+  const calibTrace = stepResponseTrace(nFrames, tAssoc, CALIBRATION_RMAX, CALIBRATION_KD);
+  const blankTrace  = stepResponseTrace(nFrames, tAssoc, BLANK_RMAX, BLANK_KD);
+
+  const parts = [];
+  for (const rg of regions) {
+    const f32 = new Float32Array(nFrames * nTotal);
+
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[0 * nFrames + timeIdx] = calibTrace[timeIdx] / 240;
+    }
+    for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+      f32[1 * nFrames + timeIdx] = blankTrace[timeIdx] / 240;
+    }
+    for (let concIdx = 0; concIdx < nSpots; concIdx++) {
+      const seqIndex = concIdx + 2;
+      for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+        const ru = concIdx < rg.traces.length ? rg.traces[concIdx][timeIdx] : 0;
+        f32[seqIndex * nFrames + timeIdx] = ru / 240;
       }
     }
-    circles.push({ ci, cj, r, capacity: cap });
+
+    const dataB64 = await encodeCompressedData(f32);
+    parts.push(
+      `  <Input>\n` +
+      `    <Name>Roi${rg.idx}</Name>\n` +
+      `    <Data>${dataB64}</Data>\n` +
+      `  </Input>`
+    );
   }
+  return parts.join("\n");
+}
 
-  let iter = 0;
-  while (coveredCount / (m * n) < targetConfluence && iter < maxCircles) {
-    placeOneCircle();
-    iter++;
+function stkTimeOffset(concIdx) {
+  const g = state.lastData.grid, n = state.parsed.nFrames;
+  const span = g[n - 1] - g[0];
+  return concIdx * span;
+}
+
+function stkFileName(concIdx) {
+  const c = state.parsed.concs[concIdx];
+  const tag = (c != null) ? fmtConc(c).replace(/[^0-9A-Za-z.]+/g, '') : `spot${concIdx + 1}`;
+  return `spr_stack_${tag}.stk`;
+}
+
+function getInjectionWindow(seqIndex = 0) {
+  const tBase  = +$("tBase").value;
+  const tAssoc = +$("tAssoc").value;
+  const offset = stkTimeOffset(seqIndex);
+  const tB = tBase + offset;
+  const tD = tAssoc + offset;
+  return { tB, tD };
+}
+
+function stepResponseTrace(nFrames, tAssoc, Rmax, kd) {
+  const trace = new Float64Array(nFrames);
+  for (let t = 0; t < nFrames; t++) {
+    trace[t] = (t < tAssoc) ? Rmax : Rmax * Math.exp(-kd * (t - tAssoc));
   }
-
-  return { s, circles, achievedConfluence: coveredCount / (m * n) };
+  return trace;
 }
 
-function circleOverlapsAny(ci, cj, r, circles) {
-  for (const c of circles) {
-    const dx = ci - c.ci, dy = cj - c.cj;
-    const minDist = r + c.r;
-    if (dx * dx + dy * dy < minDist * minDist) return true;
-  }
-  return false;
-}
-
-function allowOverlap() {
-  const el = $("overlap");
-  return el ? el.checked : true;
-}
-
-on("overlap", "change", () => refreshCapacityFieldIfNeeded());
-
-function getSeed() {
-  const el = $("inputSeed");
-  const v = el ? +el.value : NaN;
-  return Number.isFinite(v) ? v : 0;
-}
-
-on("genSeed", "click", () => {
-  const el = $("inputSeed");
-  if (el) el.value = Math.floor(Math.random() * 2 ** 32);
-  refreshCapacityFieldIfNeeded();
-});
-
-on("inputSeed", "input", refreshCapacityFieldIfNeeded);
-
-const CAPACITY_BINS = [1.0];
-const CIRCLE_R_MIN = 15, CIRCLE_R_MAX = 25;
-
-let lastFieldSeed, lastFieldConfluence, lastFieldOverlap;
-
-function getTargetConfluence() {
-  const el = $("Confluency");
-  const pct = el ? +el.value : NaN;
-  return (Number.isFinite(pct) ? pct : 0) / 100;
-}
-
-function refreshCapacityFieldIfNeeded() {
-  const seed = getSeed();
-  const targetConfluence = getTargetConfluence();
-  const overlap = allowOverlap();
-
-  const unchanged = state.capacityField
-    && seed === lastFieldSeed
-    && targetConfluence === lastFieldConfluence
-    && overlap === lastFieldOverlap;
-  if (unchanged) return;
-
-  state.capacityField = generateCapacityField({
-    m: IMG_H, n: IMG_W,
-    capacityBins: CAPACITY_BINS,
-    targetConfluence,
-    rMin: CIRCLE_R_MIN, rMax: CIRCLE_R_MAX,
-    seed
-  });
-
-  lastFieldSeed = seed;
-  lastFieldConfluence = targetConfluence;
-  lastFieldOverlap = overlap;
-}
-
-on("Confluency", "input", refreshCapacityFieldIfNeeded);
-
-function updateStackImage() {
-  const results = $("results");
-  if (!state.parsed || !state.parsed.regions || state.parsed.nSpots === 0 || state.parsed.nFrames === 0) {
-    if (results) results.style.display = "none";
-    return;
-  }
-
-  const totalFrames = state.parsed.nFrames * state.parsed.nSpots;
-  const slider = $("frame-slider");
-  if (slider) {
-    slider.max = totalFrames - 1;
-    if (+slider.value > totalFrames - 1) slider.value = 0;
-  }
-
-  const totalEl = $("total-frames");
-  if (totalEl) totalEl.textContent =
-    `${totalFrames}  (${state.parsed.nFrames} time points × ${state.parsed.nSpots} concentrations)`;
-  if (results) results.style.display = "block";
-  renderPreview(slider ? +slider.value : 0);
-}
-
-export function decodeFrame(globalFrame) {
-  return {
-    concIdx: Math.floor(globalFrame / state.parsed.nFrames),
-    timeIdx: globalFrame % state.parsed.nFrames
-  };
-}
-
-function regionBrightness16(rg, concIdx, timeIdx) {
-  if (concIdx >= rg.traces.length) return 0;
-  const { globalMin, globalMax } = state.parsed;
-  const denom = (globalMax - globalMin) || 1;
-  const ru    = rg.traces[concIdx][timeIdx];
-  const norm  = Math.max(0, (ru - globalMin) / denom);
+function specialTraceBrightness16(trace, timeIdx) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of trace) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const denom = (hi - lo) || 1;
+  const norm = (trace[timeIdx] - lo) / denom;
   return Math.round(norm * MAX16);
 }
 
-function stampDisk(mat, cx, cy, r, val) {
-  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
-  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
-  const r2 = r * r;
-  for (let py = y0; py <= y1; py++) {
-    for (let px = x0; px <= x1; px++) {
-      const dx = px - cx, dy = py - cy;
-      if (dx * dx + dy * dy <= r2) mat[py * IMG_W + px] = val;
-    }
+function buildSpecialStkBuffer(kind, baseDate) {
+  const FRAME_TYPE_SPR_GRAY16 = 101;
+  const nFrames       = state.parsed.nFrames;
+  const bytesPerFrame = IMG_W * IMG_H * 2;
+  const tBase  = +$("tBase").value;
+  const tAssoc = +$("tAssoc").value;
+
+  const isCalibration = kind === 'calibration';
+  const trace = stepResponseTrace(
+    nFrames, tAssoc,
+    isCalibration ? CALIBRATION_RMAX : BLANK_RMAX,
+    isCalibration ? CALIBRATION_KD   : BLANK_KD
+  );
+
+  const timeOffset   = 0;
+  const startTimeStr = formatTimestamp(baseDate);
+
+  const enc = new TextEncoder();
+  const concStr  = isCalibration ? 'C' : '0';
+  const labelStr = 'SPR simulation';
+  const descStr  = isCalibration ? 'calibration standard (step)' : 'blank / buffer injection';
+
+  const strBytes = s => enc.encode(s);
+  const strSize  = s => 1 + strBytes(s).length;
+
+  const headerSize =
+    4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
+  const frameHeaderSize = 4 + 4 + 4 + 4;
+  const markersSize = 6 * 4;
+  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + markersSize;
+
+  const buf  = new ArrayBuffer(totalSize);
+  const view = new DataView(buf);
+  const u8   = new Uint8Array(buf);
+  let   pos  = 0;
+  const LE   = true;
+
+  const writeInt32   = v => { view.setInt32(pos, v, LE);   pos += 4; };
+  const writeFloat32 = v => { view.setFloat32(pos, v, LE); pos += 4; };
+  const writeString  = s => { const b = strBytes(s); u8[pos++] = b.length; u8.set(b, pos); pos += b.length; };
+
+  writeInt32(2);
+  writeString(startTimeStr);
+  writeString(concStr);
+  writeString(labelStr);
+  writeString(descStr);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(25.0);
+  writeFloat32(0.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+  writeFloat32(0.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+
+  for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+    const timestamp = timeOffset + timeIdx;
+    const b16 = specialTraceBrightness16(trace, timeIdx);
+    const mat = getMatrix16ForBrightness(b16);
+
+    writeInt32(FRAME_TYPE_SPR_GRAY16);
+    writeFloat32(timestamp);
+    writeInt32(IMG_W);
+    writeInt32(IMG_H);
+    for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
+  }
+
+  writeInt32(1000);
+  writeFloat32(tBase + timeOffset);
+  writeInt32(101);
+  writeInt32(1000);
+  writeFloat32(tAssoc + timeOffset);
+  writeInt32(102);
+
+  return buf;
+}
+
+function buildStkBuffer(baseDate = new Date(), concIdx = 0, seqIndex = concIdx) {
+  const FRAME_TYPE_SPR_GRAY16 = 101;
+  const nFrames       = state.parsed.nFrames;
+  const bytesPerFrame = IMG_W * IMG_H * 2;
+  const timeOffset    = stkTimeOffset(seqIndex);
+
+  const startTimeStr  = formatTimestamp(new Date(baseDate.getTime() + timeOffset * 1000));
+
+  const enc = new TextEncoder();
+  const c        = state.parsed.concs[concIdx];
+  const concStr  = (c != null) ? fmtConc(c) : `spot ${concIdx + 1}`;
+  const labelStr = 'SPR simulation';
+  const descStr  = `model: ${$('model').value}`;
+
+  const strBytes = s => enc.encode(s);
+  const strSize  = s => 1 + strBytes(s).length;
+
+  const headerSize =
+    4 + strSize(startTimeStr) + strSize(concStr) + strSize(labelStr) + strSize(descStr) + 4 * 12;
+  const frameHeaderSize = 4 + 4 + 4 + 4;
+  const markersSize = 6 * 4;
+  const totalSize = headerSize + nFrames * (frameHeaderSize + bytesPerFrame) + markersSize;
+
+  const buf  = new ArrayBuffer(totalSize);
+  const view = new DataView(buf);
+  const u8   = new Uint8Array(buf);
+  let   pos  = 0;
+  const LE   = true;
+
+  const writeInt32   = v => { view.setInt32(pos, v, LE);   pos += 4; };
+  const writeFloat32 = v => { view.setFloat32(pos, v, LE); pos += 4; };
+  const writeString  = s => { const b = strBytes(s); u8[pos++] = b.length; u8.set(b, pos); pos += b.length; };
+
+  writeInt32(2);
+  writeString(startTimeStr);
+  writeString(concStr);
+  writeString(labelStr);
+  writeString(descStr);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(0.0);
+  writeFloat32(25.0);
+  writeFloat32(0.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+  writeFloat32(0.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+  writeFloat32(1.0);
+
+  for (let timeIdx = 0; timeIdx < nFrames; timeIdx++) {
+    const f         = concIdx * nFrames + timeIdx;
+    const timestamp = timeOffset + state.lastData.grid[timeIdx];
+    const mat       = getMatrix16(f);
+
+    writeInt32(FRAME_TYPE_SPR_GRAY16);
+    writeFloat32(timestamp);
+    writeInt32(IMG_W);
+    writeInt32(IMG_H);
+    for (let i = 0; i < mat.length; i++) { view.setUint16(pos, mat[i], LE); pos += 2; }
+  }
+
+  const { tB, tD } = getInjectionWindow(seqIndex);
+  writeInt32(1000);
+  writeFloat32(tB);
+  writeInt32(101);
+  writeInt32(1000);
+  writeFloat32(tD);
+  writeInt32(102);
+
+  return buf;
+}
+
+function addStkFilesToFolder(folder, baseDate = new Date()) {
+  folder.file('spr_stack_calibration.stk', buildSpecialStkBuffer('calibration', baseDate));
+  folder.file('spr_stack_blank.stk', buildSpecialStkBuffer('blank', baseDate));
+  for (let c = 0; c < state.parsed.nSpots; c++) {
+    folder.file(stkFileName(c), buildStkBuffer(baseDate, c, c));
   }
 }
 
-function compositeCapacityField(mat, b16) {
-  const field = state.capacityField;
-  if (!field) return;
-  const { s } = field;
-  for (let k = 0; k < mat.length; k++) {
-    let v = Math.round(s[k] * b16);
-    if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
-    mat[k] = v;
-  }
+async function buildRoiXml(timestamp = formatTimestamp()) {
+  const { frame: peakFrame } = findPeakInjectionFrame();
+
+  const mat16   = getMatrix16(peakFrame);
+  const grayBuf = new ArrayBuffer(mat16.length * 2);
+  const grayDV  = new DataView(grayBuf);
+  for (let i = 0; i < mat16.length; i++) grayDV.setUint16(i * 2, mat16[i], true);
+  const grayCompressed = await deflateRawCompress(new Uint8Array(grayBuf));
+  const grayB64  = u8ToBase64(grayCompressed);
+  const sprGrayW = IMG_W, sprGrayH = IMG_H;
+
+  const BF_W = sprGrayW * 2, BF_H = sprGrayH * 2;
+  const bfBuf = new Uint8Array(BF_W * BF_H * 3).fill(128);
+  const bfCompressed = await deflateRawCompress(bfBuf);
+  const bfB64 = u8ToBase64(bfCompressed);
+
+  let roiEntries = "";
+
+  const winW = Math.round(sprGrayW / 2), winH = Math.round(sprGrayH / 2);
+  const winX0 = Math.round((sprGrayW - winW) / 2), winY0 = Math.round((sprGrayH - winH) / 2);
+  const sprWindow = `${winX0}, ${winY0}, ${winX0 + winW}, ${winY0 + winH}`;
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+          <RoiGroup>
+            <Timestamp>${timestamp}</Timestamp>
+            <SprWindow>${sprWindow}</SprWindow>
+          ${roiEntries}
+            <Snapshot>
+              <Width>${sprGrayW}</Width>
+              <Height>${sprGrayH}</Height>
+              <Type>SprGray16</Type>
+              <Data>${grayB64}</Data>
+            </Snapshot>
+            <Snapshot>
+              <Width>${BF_W}</Width>
+              <Height>${BF_H}</Height>
+              <Type>BrightFieldRgb24</Type>
+              <Data>${bfB64}</Data>
+            </Snapshot>
+          </RoiGroup>`;
 }
 
-export function getMatrix16(globalFrame) {
-  const mat = new Uint16Array(IMG_H * IMG_W);
-  if (!state.parsed || !state.parsed.regions) return mat;
-  const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  for (const rg of state.parsed.regions) {
-    const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    compositeCapacityField(mat, b16);
-  }
-  return mat;
+async function buildBiXml(timestamp = formatTimestamp()) {
+  const timeBlock  = await encodeTimeInput();
+  const roiEntries = await encodeResponseInput();
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+          <SPRm-Realtime>
+            <Version>2.8.2</Version>
+            <StartTime>${timestamp}</StartTime>
+          ${roiEntries}
+          ${timeBlock}
+          </SPRm-Realtime>
+          `;
 }
 
-export function getMatrix16ForBrightness(b16) {
-  const mat = new Uint16Array(IMG_H * IMG_W);
-  compositeCapacityField(mat, b16);
-  return mat;
+async function downloadAll() {
+  if (!state.parsed || !state.lastData) return;
+  setStatus("Building export…");
+
+  const baseDate  = new Date();
+  const startTime = formatTimestamp(baseDate);
+
+  const roiXml = await buildRoiXml(startTime);
+  const biXml  = await buildBiXml(startTime);
+
+  const zip = new JSZip();
+  addStkFilesToFolder(zip.folder("Stacks"), baseDate);
+  zip.folder("ROI").file("spr.roi", roiXml);
+  zip.folder("Data").file("data.bi", biXml);
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const a = Object.assign(document.createElement("a"), {
+    href:     URL.createObjectURL(blob),
+    download: "spr_export.zip"
+  });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+
+  setStatus("Export ready: spr_export.zip");
 }
 
-function renderPreview(globalFrame) {
-  if (!state.parsed || !state.parsed.regions) return;
-  const canvas = $("img-canvas");
-  if (!canvas) return;
-  canvas.width = IMG_W; canvas.height = IMG_H;
-
-  const mat = getMatrix16(globalFrame);
-  const ctx = canvas.getContext("2d");
-  const img = ctx.createImageData(IMG_W, IMG_H);
-  for (let i = 0; i < mat.length; i++) {
-    const g = mat[i] >> 8;
-    const j = i * 4;
-    img.data[j] = g; img.data[j + 1] = g; img.data[j + 2] = g; img.data[j + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-
-  const { concIdx, timeIdx } = decodeFrame(globalFrame);
-  const frameVal = $("frame-val");
-  if (frameVal) frameVal.textContent = globalFrame;
-
-  const concTag = $("conc-tag");
-  if (concTag) {
-    const cLabel = concIdx < state.parsed.concs.length ? fmtConc(state.parsed.concs[concIdx])
-                                                 : `spot ${concIdx + 1}`;
-    concTag.textContent = `${cLabel}  —  time point ${timeIdx} / ${state.parsed.nFrames - 1}`;
-  }
+async function downloadSTK() {
+  if (!state.parsed || !state.lastData) return;
+  const zip = new JSZip();
+  addStkFilesToFolder(zip.folder("Stack"), new Date());
+  const blob = await zip.generateAsync({ type: "blob" });
+  const a = Object.assign(document.createElement('a'), {
+    href:     URL.createObjectURL(blob),
+    download: 'DATA.zip'
+  });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-export function findPeakInjectionFrame() {
-  const tA = 0;
-  const tD = +$("tAssoc").value;
-  const { regions, nFrames, nSpots, times } = state.parsed;
-
-  let bestFrame = 0, bestRU = -Infinity;
-  for (let f = 0; f < nFrames * nSpots; f++) {
-    const { concIdx, timeIdx } = decodeFrame(f);
-    const t = times[timeIdx];
-    if (t < tA || t >= tD) continue;
-    let ru = 0;
-    for (const rg of regions)
-      if (concIdx < rg.traces.length) ru = Math.max(ru, rg.traces[concIdx][timeIdx]);
-    if (ru > bestRU) { bestRU = ru; bestFrame = f; }
-  }
-  return { frame: bestFrame, ru: bestRU };
-}
-
-on("frame-slider", "input", function () { renderPreview(+this.value); });
-
-let playing = false, raf = null;
-
-function stepFrame() {
-  if (!playing || !state.parsed) { playing = false; return; }
-  const slider = $("frame-slider");
-  const totalFrames = state.parsed.nFrames * state.parsed.nSpots;
-  if (!slider || totalFrames <= 0) { playing = false; return; }
-
-  const t = (+slider.value + 4) % totalFrames;
-  slider.value = t;
-  renderPreview(t);
-  raf = requestAnimationFrame(stepFrame);
-}
-
-on("play", "click", () => {
-  const btn = $("play");
-  playing = !playing;
-  if (btn) btn.textContent = playing ? "Pause" : "Play";
-  if (playing) stepFrame(); else cancelAnimationFrame(raf);
-});
-
-onDataUpdated(updateStackImage);
-
-simulate();
-
-refreshCapacityFieldIfNeeded();
+document.getElementById("downloadAll").addEventListener("click", downloadAll);
