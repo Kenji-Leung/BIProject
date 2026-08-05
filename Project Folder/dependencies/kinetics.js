@@ -5,7 +5,6 @@ import {
   REGION_X, REGION_Y, REGION_R
 } from './main.js';
 
-/* ── Helpers ─────────────────────────────────────────────── */
 const vadd   = (a, b) => a.map((v, i) => v + b[i]);
 const vscale = (a, s) => a.map(v => v * s);
 const vsum   = a => a.reduce((x, y) => x + y, 0);
@@ -17,7 +16,6 @@ const gauss = () => {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 };
 
-/* ── Generic RK4 integrator ─────────────────────────────── */
 const simRK4 = (grid, deriv, y0, Cfun) => {
   const out = []; let y = [...y0]; out.push(vsum(y));
   for (let i = 1; i < grid.length; i++) {
@@ -33,9 +31,6 @@ const simRK4 = (grid, deriv, y0, Cfun) => {
   return out;
 };
 
-/* ── Binding models as ODE derivatives ───────────────────────
-   makeDeriv(model, Rmax, gv) where gv(id) returns a numeric value
-   for the given input id. gv defaults to reading the live DOM. */
 function makeDeriv(model, Rmax, gv) {
   gv = gv || (id => +$(id).value);
 
@@ -70,7 +65,6 @@ function makeDeriv(model, Rmax, gv) {
         return { a: 2 * ka1 * free, b: -kd1 * y[0] }; }
     };
   }
-  // two-state conformational change:  A + B <-> AB <-> AB*
   const ka1 = gv("ka1"), kd1 = gv("kd1"), ka2 = gv("ka2"), kd2 = gv("kd2");
   return {
     size: 2,
@@ -81,7 +75,6 @@ function makeDeriv(model, Rmax, gv) {
   };
 }
 
-/* ── Mass-transport modifier. Wraps ANY model's derivative. ── */
 function withTransport(base, kt) {
   return {
     size: base.size,
@@ -94,11 +87,9 @@ function withTransport(base, kt) {
   };
 }
 
-/* ── Formatting ──────────────────────────────────────────── */
 const parseConcs = str =>
   (str || "").split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v > 0);
 
-/* ── Model metadata ──────────────────────────────────────── */
 const MODEL_HINTS = {
   langmuir:   "Simplest case: one analyte binding one immobilised ligand.",
   hetLigand:  "Two available binding sites with two completely independent dynamics.",
@@ -117,7 +108,7 @@ export function simulate() {
   const tBase   = +$("tBase").value;
   const tAssoc  = +$("tAssoc").value;
   const tDissoc = +$("tDissoc").value;
-  const cyc     = tAssoc + tDissoc;   // one injection's association + dissociation
+  const cyc     = tAssoc + tDissoc;
 
   const noiseOn = $("noiseOn").checked;
   const noiseSd = +$("noiseSd").value || 0;
@@ -125,7 +116,7 @@ export function simulate() {
 
   const concs  = parseConcs($("concSeries").value);
   const nSpots = concs.length;
-  const total  = tBase + nSpots * cyc;   // full serial timeline
+  const total  = tBase + nSpots * cyc;
 
   const grid = Array.from({ length: Math.round(total) + 1 }, (_, i) => i);
 
@@ -197,11 +188,6 @@ function genDilution() {
   simulate();
 }
 
-/* ══════════════════════════════════════════════════════════
-   EVENT LISTENERS
-   ══════════════════════════════════════════════════════════ */
-
-// Model/kinetics inputs: re-simulate directly from live DOM values.
 MODEL_INPUT_IDS.forEach(id => {
   const el = $(id);
   if (!el) { console.warn("Missing element:", id); return; }
@@ -217,7 +203,6 @@ on("mtlOn", "change", () => {
   simulate();
 });
 
-// Global inputs (shared by the whole image, incl. the concentration series).
 ["concSeries", "tBase", "tAssoc", "tDissoc", "noiseSd", "drift"]
   .forEach(id => on(id, "input", simulate));
 
@@ -232,6 +217,5 @@ on("noiseOn", "change", () => {
 });
 
 on("genDil", "click", genDilution);
-
 
 setModelVisibility();

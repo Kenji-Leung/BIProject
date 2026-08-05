@@ -24,7 +24,7 @@ function generateCapacityField({
   seed
 }) {
   const rng = mulberry32(seed);
-  const noOverlap = !allowOverlap();   // read once per call — see allowOverlap() below
+  const noOverlap = !allowOverlap();
 
   const covered = new Uint8Array(m * n);
   let coveredCount = 0;
@@ -44,7 +44,7 @@ function generateCapacityField({
       tries++;
     } while (noOverlap && circleOverlapsAny(ci, cj, r, circles) && tries < MAX_OVERLAP_RETRIES);
 
-    if (noOverlap && circleOverlapsAny(ci, cj, r, circles)) return;   // couldn't fit one — skip
+    if (noOverlap && circleOverlapsAny(ci, cj, r, circles)) return;
 
     const r2 = r * r;
     const iLo = Math.max(0, Math.floor(ci - r)), iHi = Math.min(m - 1, Math.ceil(ci + r));
@@ -56,7 +56,7 @@ function generateCapacityField({
         if (d2 <= r2) {
           const k = i * n + j;
           if (covered[k] === 0) { covered[k] = 1; coveredCount++; }
-          if (cap > s[k]) s[k] = cap;   // MAX composition, flat value within the disk
+          if (cap > s[k]) s[k] = cap;
         }
       }
     }
@@ -102,7 +102,7 @@ on("genSeed", "click", () => {
 
 on("inputSeed", "input", refreshCapacityFieldIfNeeded);
 
-const CAPACITY_BINS = [1.0];
+const CAPACITY_BINS = [0.4, 0.6, 0.8, 1.0];
 const CIRCLE_R_MIN = 15, CIRCLE_R_MAX = 25;
 
 let lastFieldSeed, lastFieldConfluence, lastFieldOverlap;
@@ -176,21 +176,44 @@ function regionBrightness16(rg, concIdx, timeIdx) {
   return Math.round(norm * MAX16);
 }
 
-export function getMatrix16(globalFrame) {
-  const mat = new Uint16Array(IMG_H * IMG_W);   // zero = black
-  if (!state.parsed || !state.parsed.regions) return mat;
+function stampDisk(mat, cx, cy, r, val) {
+  if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0) return;
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(IMG_W - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(IMG_H - 1, Math.ceil(cy + r));
+  const r2 = r * r;
+  for (let py = y0; py <= y1; py++) {
+    for (let px = x0; px <= x1; px++) {
+      const dx = px - cx, dy = py - cy;
+      if (dx * dx + dy * dy <= r2) mat[py * IMG_W + px] = val;
+    }
+  }
+}
+
+function compositeCapacityField(mat, b16) {
   const field = state.capacityField;
-  if (!field) return mat;
+  if (!field) return;
   const { s } = field;
+  for (let k = 0; k < mat.length; k++) {
+    let v = Math.round(s[k] * b16);
+    if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
+    mat[k] = v;
+  }
+}
+
+export function getMatrix16(globalFrame) {
+  const mat = new Uint16Array(IMG_H * IMG_W);
+  if (!state.parsed || !state.parsed.regions) return mat;
   const { concIdx, timeIdx } = decodeFrame(globalFrame);
   for (const rg of state.parsed.regions) {
     const b16 = regionBrightness16(rg, concIdx, timeIdx);
-    for (let k = 0; k < mat.length; k++) {
-      let v = Math.round(s[k] * b16);
-      if (v < 0) v = 0; else if (v > MAX16) v = MAX16;
-      mat[k] = v;
-    }
+    compositeCapacityField(mat, b16);
   }
+  return mat;
+}
+
+export function getMatrix16ForBrightness(b16) {
+  const mat = new Uint16Array(IMG_H * IMG_W);
+  compositeCapacityField(mat, b16);
   return mat;
 }
 
@@ -204,7 +227,7 @@ function renderPreview(globalFrame) {
   const ctx = canvas.getContext("2d");
   const img = ctx.createImageData(IMG_W, IMG_H);
   for (let i = 0; i < mat.length; i++) {
-    const g = mat[i] >> 8;            // 16-bit -> 8-bit grey
+    const g = mat[i] >> 8;
     const j = i * 4;
     img.data[j] = g; img.data[j + 1] = g; img.data[j + 2] = g; img.data[j + 3] = 255;
   }
@@ -223,9 +246,6 @@ function renderPreview(globalFrame) {
 }
 
 export function findPeakInjectionFrame() {
-  // Per-concentration local axis starts at each injection's own
-  // association onset (t=0), not a shared baseline — see simulate()
-  // in kinetics.js.
   const tA = 0;
   const tD = +$("tAssoc").value;
   const { regions, nFrames, nSpots, times } = state.parsed;
@@ -242,10 +262,6 @@ export function findPeakInjectionFrame() {
   }
   return { frame: bestFrame, ru: bestRU };
 }
-
-/* ══════════════════════════════════════════════════════════
-   EVENT LISTENERS — frame scrubbing + play/pause
-   ══════════════════════════════════════════════════════════ */
 
 on("frame-slider", "input", function () { renderPreview(+this.value); });
 
@@ -271,5 +287,7 @@ on("play", "click", () => {
 });
 
 onDataUpdated(updateStackImage);
+
 simulate();
+
 refreshCapacityFieldIfNeeded();
