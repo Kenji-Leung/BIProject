@@ -102,7 +102,7 @@ on("genSeed", "click", () => {
 
 on("inputSeed", "input", refreshCapacityFieldIfNeeded);
 
-const CAPACITY_BINS = [0.4, 0.6, 0.8, 1.0];
+const CAPACITY_BINS = [1.0];
 const CIRCLE_R_MIN = 15, CIRCLE_R_MAX = 25;
 
 let lastFieldSeed, lastFieldConfluence, lastFieldOverlap;
